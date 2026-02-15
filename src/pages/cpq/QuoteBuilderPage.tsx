@@ -1,19 +1,16 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useSearchParams, useParams } from "react-router-dom";
-import { Package, Plus, Minus, Trash2, Calculator, Save, Send, ArrowLeft } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Package, Plus, Trash2, Calculator, Save, Send, ArrowLeft } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useProducts, useCreateQuote, useQuote, useUpdateQuote, useQuoteItems } from "@/hooks/useCPQ";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { Badge } from "@/components/ui/badge";
-import type { QuoteItem } from "@/types/cpq";
 
 interface LocalQuoteItem {
   id?: string;
@@ -103,7 +100,7 @@ export default function QuoteBuilderPage() {
     },
   });
 
-  const { data: contacts, isLoading: isLoadingContacts } = useQuery({
+  const { data: contacts } = useQuery({
     queryKey: ["contacts-list", quoteData.account_id, user?.id], 
     queryFn: async () => {
       if (!quoteData.account_id || !user?.id) return [];
@@ -115,7 +112,7 @@ export default function QuoteBuilderPage() {
     enabled: !!quoteData.account_id && !!user,
   });
 
-  const { data: opportunities, isLoading: isLoadingOpportunities } = useQuery({
+  const { data: opportunities } = useQuery({
     queryKey: ["opportunities-list", quoteData.account_id, user?.id],
     queryFn: async () => {
       if (!quoteData.account_id || !user?.id) return [];
