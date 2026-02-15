@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { 
   FileText, ArrowRight, ArrowLeft, Check, FileStack,
-  Building2, User, Briefcase, Calendar, Loader2
+  Building2, User, Calendar, Loader2
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";

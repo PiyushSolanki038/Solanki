@@ -3,7 +3,8 @@ import {
   useOpportunities, 
   useCreateOpportunity, 
   useUpdateOpportunity, 
-  useDeleteOpportunity 
+  useDeleteOpportunity,
+  useAccounts
 } from "@/hooks/useCRM";
 import { DataTable } from "@/components/crm/DataTable";
 import { Button } from "@/components/ui/button";
@@ -46,6 +47,7 @@ export type OpportunityStage =
 export interface OpportunityRow {
   id: string;
   name: string;
+  account_id: string | null;
   amount: number | null;
   stage: OpportunityStage;
   close_date: string | null;
@@ -74,6 +76,7 @@ const STAGE_COLORS: Record<string, string> = {
 
 export default function OpportunitiesPage() {
   const { data: opportunities = [], isLoading } = useOpportunities();
+  const { data: accounts = [] } = useAccounts();
   const createOpp = useCreateOpportunity();
   const updateOpp = useUpdateOpportunity();
   const deleteOpp = useDeleteOpportunity();
@@ -83,6 +86,7 @@ export default function OpportunitiesPage() {
 
   const [formData, setFormData] = useState({
     name: "",
+    account_id: "",
     amount: "",
     stage: "new" as OpportunityStage,
     close_date: "",
@@ -94,6 +98,7 @@ export default function OpportunitiesPage() {
     setEditingOpp(null);
     setFormData({
       name: "",
+      account_id: "",
       amount: "",
       stage: "new",
       close_date: "",
@@ -107,6 +112,7 @@ export default function OpportunitiesPage() {
     setEditingOpp(opp);
     setFormData({
       name: opp.name,
+      account_id: opp.account_id || "",
       amount: opp.amount ? opp.amount.toString() : "",
       stage: opp.stage,
       close_date: opp.close_date ? format(new Date(opp.close_date), "yyyy-MM-dd") : "",
@@ -119,9 +125,9 @@ export default function OpportunitiesPage() {
   const handleSubmit = async () => {
     const payload = {
       ...formData,
-      amount: parseFloat(formData.amount) || null,
-      probability: parseInt(formData.probability) || null,
-      close_date: formData.close_date || null,
+      amount: formData.amount ? parseFloat(formData.amount) : undefined,
+      probability: formData.probability ? parseInt(formData.probability) : undefined,
+      close_date: formData.close_date || undefined,
     };
 
     if (editingOpp) {
@@ -243,6 +249,22 @@ export default function OpportunitiesPage() {
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   placeholder="Software License Q1"
                 />
+              </div>
+
+              <div className="grid gap-2">
+                <Label>Account</Label>
+                <Select value={formData.account_id} onValueChange={(v) => setFormData({ ...formData, account_id: v })}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select an account" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {accounts.map((acc) => (
+                      <SelectItem key={acc.id} value={acc.id}>
+                        {acc.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="grid grid-cols-2 gap-4">

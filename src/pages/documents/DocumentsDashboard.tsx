@@ -1,11 +1,10 @@
-import { useState } from "react";
 import { Link } from "react-router-dom"; // <-- Added this missing import
 import { Button } from "@/components/ui/button";
 import { StatsCard } from "@/components/crm/StatsCard";
 import { useAutoDocuments } from "@/hooks/useDocuments";
 import { 
   FileStack, FilePlus, FileText, Send, CheckCircle2, 
-  Clock, AlertCircle, ArrowRight, History, Zap
+  ArrowRight, History, Zap
 } from "lucide-react";
 
 const quickActions = [

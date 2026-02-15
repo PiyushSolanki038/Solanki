@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { useContacts, useCreateContact, useUpdateContact, useDeleteContact } from "@/hooks/useCRM";
+import { useContacts, useCreateContact, useUpdateContact, useDeleteContact, useAccounts } from "@/hooks/useCRM";
 import { DataTable } from "@/components/crm/DataTable";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -12,7 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { MoreHorizontal, Pencil, Trash2, User, Mail, Phone, Briefcase } from "lucide-react";
+import { MoreHorizontal, Pencil, Trash2, User, Mail, Phone } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,6 +31,7 @@ export interface ContactRow {
   phone: string | null;
   job_title: string | null;
   department: string | null;
+  account_id: string | null;
   description: string | null;
   created_at: string;
 }
@@ -43,6 +45,8 @@ export default function ContactsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingContact, setEditingContact] = useState<ContactRow | null>(null);
 
+  const { data: accounts = [] } = useAccounts();
+
   const [formData, setFormData] = useState({
     first_name: "",
     last_name: "",
@@ -50,6 +54,7 @@ export default function ContactsPage() {
     phone: "",
     job_title: "",
     department: "",
+    account_id: "",
     description: "",
   });
 
@@ -62,6 +67,7 @@ export default function ContactsPage() {
       phone: "",
       job_title: "",
       department: "",
+      account_id: "",
       description: "",
     });
     setDialogOpen(true);
@@ -76,6 +82,7 @@ export default function ContactsPage() {
       phone: contact.phone || "",
       job_title: contact.job_title || "",
       department: contact.department || "",
+      account_id: contact.account_id || "",
       description: contact.description || "",
     });
     setDialogOpen(true);
@@ -252,6 +259,22 @@ export default function ContactsPage() {
                     onChange={(e) => setFormData({ ...formData, department: e.target.value })}
                     placeholder="Sales"
                   />
+              </div>
+
+              <div className="grid gap-2">
+                <Label>Account</Label>
+                <Select value={formData.account_id} onValueChange={(v) => setFormData({ ...formData, account_id: v })}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select an account" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {accounts.map((acc) => (
+                      <SelectItem key={acc.id} value={acc.id}>
+                        {acc.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="grid gap-2">
