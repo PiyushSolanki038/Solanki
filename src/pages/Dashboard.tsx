@@ -306,9 +306,11 @@ const Dashboard = () => {
               <div className="lg:col-span-2">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-xl font-bold text-foreground">Recent Activity</h2>
-                  <Button variant="ghost" size="sm">
-                    View All
-                  </Button>
+                  <Link to="/dashboard/crm/activities">
+                    <Button variant="ghost" size="sm">
+                      View All
+                    </Button>
+                  </Link>
                 </div>
                 <div className="bg-card rounded-xl border border-border shadow-card overflow-hidden">
                   {recentActivity.length === 0 ? (
