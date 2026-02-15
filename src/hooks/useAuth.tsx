@@ -73,7 +73,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           .select("role")
           .eq("user_id", session.user.id)
           .maybeSingle()
-          .then(({ data }) => {
+          .then(({ data, error }) => {
+            if (error) {
+              console.error("Role fetch failed on init:", error.message);
+              setRole(null);
+              return;
+            }
             setRole(mapRole(data?.role ?? null));
           });
       }
@@ -94,7 +99,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             .select("role")
             .eq("user_id", session.user.id)
             .maybeSingle()
-            .then(({ data }) => {
+            .then(({ data, error }) => {
+              if (error) {
+                console.error("Role fetch failed on auth change:", error.message);
+                setRole(null);
+                return;
+              }
               setRole(mapRole(data?.role ?? null));
             });
         }
@@ -138,11 +148,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return { data: null, error: error as Error };
     }
 
-    const { data: roleData } = await supabase
+    const { data: roleData, error: roleError } = await supabase
       .from("user_roles")
       .select("role")
       .eq("user_id", data.user.id)
       .maybeSingle();
+
+    if (roleError) {
+      await supabase.auth.signOut();
+      return {
+        data: null,
+        error: new Error("Role lookup failed: " + roleError.message),
+      };
+    }
 
     const mappedRole = mapRole(roleData?.role ?? null);
 
