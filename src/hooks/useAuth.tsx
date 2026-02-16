@@ -2,12 +2,12 @@ import {
   createContext,
   useContext,
   useEffect,
-  useRef,
   useState,
   ReactNode,
 } from "react";
 import { User, Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
+// IMPORTANT: ONLY import the enum. Do not import components or hooks here.
 import { AppRole } from "@/types/roles";
 
 interface AuthContextType {
@@ -15,34 +15,12 @@ interface AuthContextType {
   session: Session | null;
   role: AppRole | null;
   loading: boolean;
-  signUp: (
-    email: string,
-    password: string,
-    firstName: string,
-    lastName: string
-  ) => Promise<{ error: Error | null }>;
-  signIn: (
-    email: string,
-    password: string
-  ) => Promise<{ data: { role: AppRole } | null; error: Error | null }>;
+  signUp: (email: string, password: string, firstName: string, lastName: string) => Promise<{ error: Error | null }>;
+  signIn: (email: string, password: string) => Promise<{ data: { role: AppRole } | null; error: Error | null }>;
   signOut: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-/* ---------- ROLE MAPPER ---------- */
-const mapRole = (role: string | null): AppRole | null => {
-  switch (role) {
-    case AppRole.ADMIN:
-      return AppRole.ADMIN;
-    case AppRole.EMPLOYEE:
-      return AppRole.EMPLOYEE;
-    case AppRole.USER:
-      return AppRole.USER;
-    default:
-      return null;
-  }
-};
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -50,154 +28,94 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<AppRole | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const authInitialized = useRef(false);
-
-  /* -------------------- INIT AUTH (ONCE) -------------------- */
   useEffect(() => {
-    const init = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      setSession(session);
-      setUser(session?.user ?? null);
-
-      // 🔑 IMPORTANT: auth is done here
-      authInitialized.current = true;
-      setLoading(false);
-
-      // 🔄 role loads AFTER auth (non-blocking)
-      if (session?.user) {
-        supabase
-          .from("user_roles")
-          .select("role")
-          .eq("user_id", session.user.id)
-          .maybeSingle()
-          .then(({ data, error }) => {
-            if (error) {
-              console.error("Role fetch failed on init:", error.message);
-              setRole(null);
-              return;
-            }
-            setRole(mapRole(data?.role ?? null));
-          });
-      }
-    };
-
-    init();
-
-    const { data: listener } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
-        setSession(session);
-        setUser(session?.user ?? null);
-
-        setRole(null); // reset role on auth change
-
-        if (session?.user) {
-          supabase
+    // 1. Define a clean function inside useEffect to avoid external dependencies
+    const syncAuth = async () => {
+      setLoading(true);
+      try {
+        const { data: { session: currentSession } } = await supabase.auth.getSession();
+        
+        if (currentSession?.user) {
+          const { data: roleData } = await supabase
             .from("user_roles")
-            .select("role")
-            .eq("user_id", session.user.id)
-            .maybeSingle()
-            .then(({ data, error }) => {
-              if (error) {
-                console.error("Role fetch failed on auth change:", error.message);
-                setRole(null);
-                return;
-              }
-              setRole(mapRole(data?.role ?? null));
-            });
-        }
+            .select("role, approved")
+            .eq("user_id", currentSession.user.id)
+            .maybeSingle();
 
-        if (!authInitialized.current) {
-          authInitialized.current = true;
-          setLoading(false);
+          // Strict check: if employee but not approved, log out
+          if (roleData?.role === "employee" && !roleData?.approved) {
+            await supabase.auth.signOut();
+            setUser(null);
+            setRole(null);
+          } else {
+            setUser(currentSession.user);
+            setSession(currentSession);
+            setRole(roleData?.role as AppRole || null);
+          }
         }
+      } catch (e) {
+        console.error("Auth sync error", e);
+      } finally {
+        setLoading(false); // This MUST fire
       }
-    );
-
-    return () => {
-      listener.subscription.unsubscribe();
     };
+
+    syncAuth();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(() => {
+      syncAuth();
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  /* -------------------- ACTIONS -------------------- */
-
-  const signUp = async (
-    email: string,
-    password: string,
-    firstName: string,
-    lastName: string
-  ) => {
+  const signUp = async (email: string, password: string, firstName: string, lastName: string) => {
     const { error } = await supabase.auth.signUp({
       email,
       password,
-      options: {
-        data: { first_name: firstName, last_name: lastName },
-      },
+      options: { data: { first_name: firstName, last_name: lastName } },
     });
-
     return { error: error as Error | null };
   };
 
   const signIn = async (email: string, password: string) => {
-    const { data, error } =
-      await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error || !data.user) return { data: null, error: error as Error };
 
-    if (error || !data.user) {
-      return { data: null, error: error as Error };
-    }
-
-    const { data: roleData, error: roleError } = await supabase
+    const { data: roleData } = await supabase
       .from("user_roles")
-      .select("role")
+      .select("role, approved")
       .eq("user_id", data.user.id)
       .maybeSingle();
 
-    if (roleError) {
+    if (roleData?.role === "employee" && !roleData?.approved) {
       await supabase.auth.signOut();
-      return {
-        data: null,
-        error: new Error("Role lookup failed: " + roleError.message),
-      };
+      return { data: null, error: new Error("not approved") };
     }
 
-    const mappedRole = mapRole(roleData?.role ?? null);
-
-    if (!mappedRole) {
-      await supabase.auth.signOut();
-      return {
-        data: null,
-        error: new Error("Account pending admin approval."),
-      };
-    }
-
-    setRole(mappedRole);
-
-    return {
-      data: { role: mappedRole },
-      error: null,
-    };
+    setRole(roleData?.role as AppRole);
+    return { data: { role: roleData?.role as AppRole }, error: null };
   };
 
   const signOut = async () => {
+    setLoading(true);
     await supabase.auth.signOut();
     setUser(null);
-    setSession(null);
     setRole(null);
+    setLoading(false);
   };
 
   return (
-    <AuthContext.Provider
-      value={{ user, session, role, loading, signUp, signIn, signOut }}
-    >
+    <AuthContext.Provider value={{ user, session, role, loading, signUp, signIn, signOut }}>
       {children}
     </AuthContext.Provider>
   );
 }
 
 export const useAuth = () => {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error("useAuth must be used inside AuthProvider");
-  return ctx;
+  const context = useContext(AuthContext);
+  if (!context) throw new Error("useAuth must be used within AuthProvider");
+  return context;
 };
+
+export { AppRole };
