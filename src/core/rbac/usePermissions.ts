@@ -8,8 +8,8 @@
  * - Feature access
  */
 
-import { useAuth } from "./useAuth";
-import { useOrganization } from "./useOrganization";
+import { useAuth } from "@/core/auth/useAuth";
+import { useOrganization } from "@/workspaces/organization/hooks/useOrganization";
 import { AppRole, isPlatformRole } from "@/core/types/roles";
 import { ModuleType } from "@/core/types/organization";
 

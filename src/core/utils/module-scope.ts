@@ -104,8 +104,6 @@ export function buildModuleCreatePayload<TPayload extends Record<string, unknown
   const nextPayload = {
     ...payload,
     organization_id: organizationId,
-    // Keep legacy field synchronized while module code is still transitioning.
-    tenant_id: organizationId,
   } as TPayload;
 
   if (ownerColumn) {

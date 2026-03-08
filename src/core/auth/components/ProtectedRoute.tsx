@@ -21,16 +21,40 @@ function RouteLoader() {
 }
 
 /**
+ * Shared guard hook — resolves role + account state for all route guards.
+ * If role is null or account is not active, access is denied.
+ */
+function useGuardedAuth() {
+  const { user, role: authRole, loading } = useAuth();
+  const role = authRole ?? null;
+
+  // TODO: Once accountState is exposed from AuthContext (Phase 6.6 full),
+  // replace this with: const isActiveAccount = accountState === "active";
+  // For now, we block null roles and check known non-active role strings.
+  const isSuspendedOrRejected =
+    role === "rejected" ||
+    role === ("suspended" as typeof role) ||
+    role === ("pending_verification" as typeof role);
+  const isActiveAccount = !!role && !isSuspendedOrRejected;
+
+  return { user, role, isActiveAccount, loading };
+}
+
+/**
  * Platform Admin Route - Only for SaaS owner
  */
 export function PlatformAdminRoute({ children }: { children: React.ReactNode }) {
-  const { user, role, loading } = useAuth();
+  const { user, role, isActiveAccount, loading } = useGuardedAuth();
 
   if (loading) {
     return <RouteLoader />;
   }
 
-  if (!user || !isPlatformRole(role ?? "pending_approval")) {
+  if (!user || !isActiveAccount) {
+    return <Navigate to="/unauthorized" replace />;
+  }
+
+  if (!isPlatformRole(role)) {
     return <Navigate to="/unauthorized" replace />;
   }
 
@@ -41,7 +65,7 @@ export function PlatformAdminRoute({ children }: { children: React.ReactNode }) 
  * Pending Approval Route - For users waiting for admin approval
  */
 export function PendingApprovalRoute({ children }: { children: React.ReactNode }) {
-  const { user, role, loading } = useAuth();
+  const { user, role, loading } = useGuardedAuth();
   const { tenant } = useTenant();
   const { organization } = useOrganization();
 
@@ -80,18 +104,18 @@ export function PendingApprovalRoute({ children }: { children: React.ReactNode }
  * Tenant Admin Route - For tenant admins and users
  */
 export function TenantAdminRoute({ children }: { children: React.ReactNode }) {
-  const { user, role, loading } = useAuth();
+  const { user, role, isActiveAccount, loading } = useGuardedAuth();
 
   if (loading) {
     return <RouteLoader />;
   }
 
-  if (!user) {
+  if (!user || !isActiveAccount) {
     return <Navigate to="/auth/sign-in" replace />;
   }
 
   // Platform admin can also access
-  if (isPlatformRole(role ?? "pending_approval")) {
+  if (isPlatformRole(role)) {
     return <>{children}</>;
   }
 
@@ -99,7 +123,7 @@ export function TenantAdminRoute({ children }: { children: React.ReactNode }) {
     return <>{children}</>;
   }
 
-  if (isPendingApproval(role ?? "pending_approval")) {
+  if (isPendingApproval(role ?? null)) {
     return <Navigate to="/pending-approval" replace />;
   }
 
@@ -110,13 +134,13 @@ export function TenantAdminRoute({ children }: { children: React.ReactNode }) {
  * Client/User Route - For external customers (portal access)
  */
 export function ClientRoute({ children }: { children: React.ReactNode }) {
-  const { user, role, loading } = useAuth();
+  const { user, role, isActiveAccount, loading } = useGuardedAuth();
 
   if (loading) {
     return <RouteLoader />;
   }
 
-  if (!user) {
+  if (!user || !isActiveAccount) {
     return <Navigate to="/auth/sign-in" replace />;
   }
 
@@ -124,7 +148,7 @@ export function ClientRoute({ children }: { children: React.ReactNode }) {
     return <>{children}</>;
   }
 
-  if (isPendingApproval(role ?? "pending_approval")) {
+  if (isPendingApproval(role ?? null)) {
     return <Navigate to="/pending-approval" replace />;
   }
 
@@ -139,17 +163,17 @@ export function ClientRoute({ children }: { children: React.ReactNode }) {
  * Organization Owner Route - owner/admin controls
  */
 export function OrganizationOwnerRoute({ children }: { children: React.ReactNode }) {
-  const { user, role, loading } = useAuth();
+  const { user, role, isActiveAccount, loading } = useGuardedAuth();
 
   if (loading) {
     return <RouteLoader />;
   }
 
-  if (!user) {
+  if (!user || !isActiveAccount) {
     return <Navigate to="/auth/sign-in" replace />;
   }
 
-  if (isPlatformRole(role ?? null)) {
+  if (isPlatformRole(role)) {
     return <Navigate to={platformPath()} replace />;
   }
 
@@ -190,21 +214,21 @@ export function CustomerRoute({ children }: { children: React.ReactNode }) {
  * Admin Route - Either platform admin or tenant admin
  */
 export function AdminRoute({ children }: { children: React.ReactNode }) {
-  const { user, role, loading } = useAuth();
+  const { user, role, isActiveAccount, loading } = useGuardedAuth();
 
   if (loading) {
     return <RouteLoader />;
   }
 
-  if (!user) {
+  if (!user || !isActiveAccount) {
     return <Navigate to="/auth/sign-in" replace />;
   }
 
-  if (isPlatformRole(role ?? "pending_approval") || isTenantAdminRole(role)) {
+  if (isPlatformRole(role) || isTenantAdminRole(role)) {
     return <>{children}</>;
   }
 
-  if (isPendingApproval(role ?? "pending_approval")) {
+  if (isPendingApproval(role ?? null)) {
     return <Navigate to="/pending-approval" replace />;
   }
 

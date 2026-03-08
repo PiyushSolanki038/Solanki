@@ -1,3 +1,9 @@
+/**
+ * @deprecated TenantProvider is deprecated.
+ * Use OrganizationProvider for new code. This provider is retained only for
+ * backward-compatible layout components that still rely on `useTenant()`.
+ * It will be removed once all `useTenant()` call sites are migrated.
+ */
 "use client";
 
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";

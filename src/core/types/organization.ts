@@ -1,4 +1,4 @@
-import type { ModuleType } from "./modules";
+// ModuleType is re-exported below for consumers; no local import needed.
 
 export type OrganizationStatus = "active" | "suspended" | "cancelled" | "trial";
 export type OrganizationPlan = "starter" | "professional" | "enterprise";
@@ -52,24 +52,5 @@ export interface OrganizationMembership {
   organization?: Organization | null;
 }
 
-export const isModuleEnabled = (
-  subscription: OrganizationSubscription | null | undefined,
-  module: ModuleType,
-): boolean => {
-  if (!subscription) return false;
-
-  switch (module) {
-    case "crm":
-      return Boolean(subscription.module_crm);
-    case "clm":
-      return Boolean(subscription.module_clm);
-    case "cpq":
-      return Boolean(subscription.module_cpq);
-    case "erp":
-      return Boolean(subscription.module_erp);
-    case "documents":
-      return Boolean(subscription.module_documents);
-    default:
-      return false;
-  }
-};
+// Re-export the canonical isModuleEnabled from tenant.ts to avoid duplication (TS-03)
+export { isModuleEnabled } from "./tenant";

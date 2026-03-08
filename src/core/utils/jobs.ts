@@ -43,7 +43,6 @@ export async function enqueueJob(input: EnqueueJobInput): Promise<string | null>
     .from("background_jobs")
     .insert({
       organization_id: organizationId,
-      tenant_id: organizationId,
       job_type: input.jobType,
       payload: input.payload,
       status: "queued",

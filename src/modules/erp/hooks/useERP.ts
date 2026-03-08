@@ -53,10 +53,7 @@ type FinancialRecordRow = Database["public"]["Tables"]["financial_records"]["Row
 type FinancialRecordInsert = Database["public"]["Tables"]["financial_records"]["Insert"];
 type FinancialRecordUpdate = Database["public"]["Tables"]["financial_records"]["Update"];
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
+import { getErrorMessage } from "@/core/utils/error";
 
 function mapSupplier(row: SupplierRow): Supplier {
   return {

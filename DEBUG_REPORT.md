@@ -1,1305 +1,676 @@
-# Debug Report - SISWIT Unified Platform
+# SISWIT Platform — Comprehensive Debug Report
 
-**Date:** 2026-03-04  
-**Environment:** Development (localhost:8080)  
-**Status:** Issues Identified  
-
----
-
-## Executive Summary
-
-The SISWIT Unified Platform is a complex multi-tenant SaaS application built with React, TypeScript, Vite, Supabase, and Tailwind CSS. The application integrates multiple business modules (CRM, CLM, CPQ, ERP, Documents) with role-based access control. This report documents all identified issues, potential problems, and areas requiring attention.
-
-**Note:** The application compiles successfully (`npm run dev` starts without errors), but there are several code quality and architectural issues that could cause runtime problems.
+**Audit Date:** March 2026  
+**Auditor:** Senior Full-Stack / Security Audit  
+**Phase:** Phase 6 — Security Hardening  
+**Stack:** React 18, TypeScript 5.8, Vite, Supabase (PostgreSQL, RLS, Auth, Edge Functions), Tailwind CSS, Radix UI, shadcn/ui
 
 ---
 
-## 1. Lint Errors & Warnings
+## Table of Contents
 
-### 1.1 Critical: ESLint Parsing Error — ✅ FIXED
-
-**File:** `src/core/api/types.ts`  
-**Issue:** Parsing error - "File appears to be binary"  
-**Severity:** Critical  
-**Status:** ✅ **Fixed on 2026-03-06** — Converted file encoding from UTF-16LE to UTF-8 (no BOM).  
-**Impact:** This file cannot be linted and may contain encoding issues. It's likely a generated Supabase types file that has become corrupted or contains non-text content.
-
-```bash
-1:0 error Parsing error: File appears to be binary
-```
-
-**Recommended Fix:**
-1. Check file encoding - ensure it's UTF-8: `file --mime-encoding src/core/api/types.ts`
-2. If corrupted, regenerate the types file: `npm run db:types`
-3. Or manually recreate the file with proper TypeScript syntax
-4. Add .eslintignore entry if file is auto-generated:
-   ```json
-   // .eslintignore
-   "src/core/api/types.ts"
-   ```
-
-### 1.2 Warning: Unused ESLint Directive
-
-**File:** `src/integrations/types.ts`  
-**Issue:** Unused eslint-disable directive  
-**Severity:** Low  
-**Line:** 1:1
-
-**Recommended Fix:**
-Remove the unused eslint-disable comment at the top of the file:
-```typescript
-// REMOVE THIS LINE:
-/* eslint-disable */
-
-// Or if it's a different directive, fix or remove it
-```
-
-### 1.3 Warning: Unnecessary Dependency — ✅ FIXED
-
-**File:** `src/app/providers/AuthProvider.tsx`  
-**Issue:** React Hook useCallback has an unnecessary dependency: 'unsafeSupabase'  
-**Severity:** Medium  
-**Status:** ✅ **Fixed on 2026-03-06** — Removed `unsafeSupabase` from `signUpOrganization` dependency array.  
-**Line:** 416:5
-
-**Recommended Fix:**
-Move the unsafeSupabase reference outside the useCallback or use the ref pattern:
-```typescript
-// OPTION 1: Remove from dependency array if not used inside
-const someCallback = useCallback(async () => {
-  // function body
-}, []); // Remove unsafeSupabase from here
-
-// OPTION 2: Use a ref to store the value
-const supabaseRef = useRef(unsafeSupabase);
-const someCallback = useCallback(async () => {
-  // use supabaseRef.current
-}, [supabaseRef]); // Add ref to dependencies
-```
+1. [Executive Summary](#1-executive-summary)
+2. [Critical Security Vulnerabilities](#2-critical-security-vulnerabilities)
+3. [Multi-Tenancy Isolation Bugs](#3-multi-tenancy-isolation-bugs)
+4. [Authentication & Authorization Bugs](#4-authentication--authorization-bugs)
+5. [Module-Specific Bugs](#5-module-specific-bugs)
+6. [Type Safety & TypeScript Issues](#6-type-safety--typescript-issues)
+7. [Data Integrity & Logic Bugs](#7-data-integrity--logic-bugs)
+8. [Performance Issues](#8-performance-issues)
+9. [Code Quality & Maintainability](#9-code-quality--maintainability)
+10. [Edge Functions & Backend Issues](#10-edge-functions--backend-issues)
+11. [RLS Policy Analysis](#11-rls-policy-analysis)
+12. [Recommendations & Priority Matrix](#12-recommendations--priority-matrix)
 
 ---
 
-## 2. Type System Duplication & Conflicts
+## 1. Executive Summary
 
-### 2.1 Duplicate ModuleType Definition — ✅ FIXED
+The SISWIT codebase is architecturally sound, with good separation of concerns (modules, hooks, providers, RBAC). The RLS migration (`015_hardened_rls_policies.sql`) is well-designed with per-operation policies and proper role-based checks. However, the **frontend data access layer has critical gaps** that can expose cross-tenant data, and there is a **systemic mismatch between the `organization_id` used in code and `tenant_id` legacy columns** that creates confusion and potential runtime failures.
 
-**Status:** ✅ **Fixed on 2026-03-06** — Created `src/core/types/modules.ts` as single source of truth. Both `organization.ts` and `tenant.ts` now re-export from it.
+### Finding Severity Distribution
 
-**Issue:** `ModuleType` is defined in two locations with identical values:
-
-1. `src/core/types/organization.ts` (line 4)
-```typescript
-export type ModuleType = "crm" | "clm" | "cpq" | "erp" | "documents";
-```
-
-2. `src/core/types/tenant.ts` (line 22)
-```typescript
-export type ModuleType = "crm" | "clm" | "cpq" | "erp" | "documents";
-```
-
-**Recommended Fix:**
-1. Create a single shared types file:
-   ```typescript
-   // src/core/types/modules.ts
-export type ModuleType = "crm" | "clm" | "cpq" | "erp" | "documents";
-   export const ALL_MODULES: ModuleType[] = ["crm", "clm", "cpq", "erp", "documents"];
-   ```
-
-2. Update imports in both files to re-export from shared location:
-   ```typescript
-   // src/core/types/organization.ts
-   export { ModuleType } from './modules';
-   
-   // src/core/types/tenant.ts  
-   export { ModuleType } from './modules';
-   ```
-
-3. Update all imports throughout the codebase to use the shared type
-
-### 2.2 Duplicate isModuleEnabled Function — ✅ PARTIALLY FIXED
-
-**Status:** ✅ **Partially fixed on 2026-03-06** — Both functions now import `ModuleType` from the shared `modules.ts`, eliminating the type duplication. The functions remain separate since they accept different parameter types (`OrganizationSubscription` vs `TenantSubscription`).
-
-**Issue:** `isModuleEnabled` function exists in both:
-
-1. `src/core/types/organization.ts` (line 52-72)
-2. `src/core/types/tenant.ts` (line 171-191)
-
-Both accept different parameter types (OrganizationSubscription vs TenantSubscription), but the function name is identical, causing potential confusion.
-
-**Recommended Fix:**
-1. Create a shared utility function with generic types:
-   ```typescript
-   // src/core/utils/module-utils.ts
-   import type { ModuleType } from '../types/modules';
-   
-   interface Subscription {
-     module_crm?: boolean;
-     module_clm?: boolean;
-     module_cpq?: boolean;
-     module_erp?: boolean;
-     module_documents?: boolean;
-   }
-   
-   export function isModuleEnabled<T extends Subscription>(
-     subscription: T | null | undefined,
-     module: ModuleType
-   ): boolean {
-     if (!subscription) return false;
-     const key = `module_${module}` as keyof T;
-     return Boolean(subscription[key]);
-   }
-   ```
-
-2. Or use more specific names to avoid confusion:
-   ```typescript
-   // Keep both but rename for clarity
-export function isOrganizationModuleEnabled(
-     subscription: OrganizationSubscription | null | undefined,
-     module: ModuleType
-   ): boolean;
-   
-export function isTenantModuleEnabled(
-     subscription: TenantSubscription | null | undefined, 
-     module: ModuleType
-   ): boolean;
-   ```
-
-### 2.3 Duplicate Type Definitions (Organization vs Tenant)
-
-The codebase maintains two parallel type systems:
-
-| Concept | Organization System | Tenant System |
-|---------|-------------------|---------------|
-| Main Entity | Organization | Tenant |
-| Subscription | OrganizationSubscription | TenantSubscription |
-| Membership | OrganizationMembership | TenantUser |
-| Module Check | isModuleEnabled (org) | isModuleEnabled (tenant) |
-
-**Recommended Fix:**
-1. **Long-term:** Consolidate to a single system (recommend Tenant-based approach)
-2. **Short-term:** Add clear comments and documentation distinguishing when to use which
-3. Create a unified provider that wraps both:
-   ```typescript
-   // src/app/providers/UnifiedWorkspaceProvider.tsx
-   interface WorkspaceContext {
-     // Unified interface
-     currentWorkspace: Tenant | Organization | null;
-     isTenantMode: boolean;
-     // ...统一的方法
-   }
-   ```
-4. Add runtime checks to prevent using wrong provider
+| Severity | Count | Category |
+|----------|-------|----------|
+| 🔴 CRITICAL | 7 | Security / Data Leak |
+| 🟠 HIGH | 9 | Multi-Tenancy / Auth |
+| 🟡 MEDIUM | 11 | Logic / Type Safety |
+| 🔵 LOW | 8 | Quality / Performance |
+| **Total** | **35** | |
 
 ---
 
-## 3. React Hooks Rule Violations
+## 2. Critical Security Vulnerabilities
 
-### 3.1 Conditional useMemo Hook — ✅ ALREADY FIXED
+### C-01: `softDeleteRecord` Has No Tenant Scoping
 
-**File:** `src/workspaces/organization_admin/layout/TenantAdminLayout.tsx`  
-**Issue:** React Hook "useMemo" is called conditionally  
-**Severity:** Critical (will cause runtime errors)  
-**Status:** ✅ **Already fixed** — `useMemo` is at line 176 (unconditional, top of component), the `if (isTenantUserRole)` early return is at line 181 (after all hooks). No violation exists.  
-**Line:** 180:21
+**File:** [`src/core/utils/soft-delete.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/core/utils/soft-delete.ts)  
+**Severity:** 🔴 CRITICAL  
+**Impact:** Cross-tenant data deletion  
 
-**Recommended Fix:**
-Move the useMemo call outside of any conditional blocks:
+The `softDeleteRecord` function updates records by `id` alone — it never filters by `organization_id` or `tenant_id`. If a user knows (or guesses) a record UUID from another tenant, they can soft-delete it.
+
 ```typescript
-// WRONG:
-function Component() {
-  if (someCondition) {
-    const value = useMemo(() => expensiveCalculation(), []);
-    return <div>{value}</div>;
-  }
-  return <div>No value</div>;
-}
+// CURRENT — no tenant scoping
+const { error } = await supabase
+  .from(table)
+  .update({ deleted_at: now, deleted_by: userId })
+  .eq("id", id)
+  .is("deleted_at", null);
+```
 
-// CORRECT:
-function Component() {
-  const value = useMemo(() => expensiveCalculation(), []);
-  
-  if (someCondition) {
-    return <div>{value}</div>;
-  }
-  return <div>No value</div>;
-}
+**Mitigation:** RLS policies in `015_hardened_rls_policies.sql` do enforce organization access on UPDATE, so the database itself should block this. However, **defense in depth requires adding `organization_id` filtering** in the application layer.
 
-// ALTERNATIVE - Use conditional logic inside useMemo:
-const value = useMemo(() => {
-  if (!someCondition) return null;
-  return expensiveCalculation();
-}, [someCondition]);
+**Fix:** Add `organizationId` parameter to `softDeleteRecord` and apply `.eq("organization_id", organizationId)`.
+
+---
+
+### C-02: `useUpdateAutoDocument` — No Tenant Scoping on Document Updates
+
+**File:** [`src/modules/documents/hooks/useDocuments.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/modules/documents/hooks/useDocuments.ts) (line ~427)  
+**Severity:** 🔴 CRITICAL  
+**Impact:** Cross-tenant document content mutation  
+
+The update mutation calls `.update(updates).eq("id", id)` without any `organization_id` filter or `applyModuleMutationScope`. It also doesn't apply any ownership check — any authenticated user who knows a document ID can modify it.
+
+```typescript
+// CURRENT — no scoping at all
+const { data, error } = await supabase
+  .from("auto_documents")
+  .update(updates)
+  .eq("id", id)  // ← ID-only, no org/tenant check
+  .select()
+  .single();
+```
+
+**Mitigation:** RLS UPDATE policy on `auto_documents` does check `organization_id`, but the app should still scope.
+
+**Fix:** Use `applyModuleMutationScope` or at minimum `.eq("organization_id", organizationId)`.
+
+---
+
+### C-03: `useUpdateDocumentTemplate` — No Tenant Scoping on Template Updates
+
+**File:** [`src/modules/documents/hooks/useDocuments.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/modules/documents/hooks/useDocuments.ts) (line ~205)  
+**Severity:** 🔴 CRITICAL  
+**Impact:** Cross-tenant template mutation  
+
+Same issue as C-02. Updates template by ID alone.
+
+```typescript
+const { data, error } = await supabase
+  .from("document_templates")
+  .update(updates)
+  .eq("id", id)  // ← no org scoping
+  .select()
+  .single();
 ```
 
 ---
 
-## 4. Type Safety Issues (any Types)
+### C-04: `useUpdateESignature` (CLM) — No Tenant Scoping
 
-### 4.1 Excessive any Usage — ✅ PARTIALLY FIXED
+**File:** [`src/modules/clm/hooks/useCLM.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/modules/clm/hooks/useCLM.ts) (line ~540)  
+**Severity:** 🔴 CRITICAL  
+**Impact:** Cross-tenant e-signature status manipulation  
 
-**Status:** ✅ **Partially fixed on 2026-03-06** — Added 7 typed interfaces (`DashboardKPIs`, `DashboardOpportunity`, `DashboardContract`, `DashboardActivity`, `DashboardLead`, `DashboardAuditLog`, `DashboardChartItem`) and exported `DashboardData` in `useOrganizationDashboard.ts`. Removed the unsafe `Record<string, unknown>` cast. The dashboard page already uses a local `DashboardItem` interface.
+Updates `contract_esignatures` by `id` alone. No `ensureContractAccessible` call, no `applyModuleMutationScope`.
 
-**Files with any type declarations:**
-
-1. **src/workspaces/organization_admin/hooks/useOrganizationDashboard.ts** (line 67)
 ```typescript
-{ data: Record<string, unknown>[] | null; count: number | null }[]
+const { data, error } = await supabase
+  .from("contract_esignatures")
+  .update(payload)
+  .eq("id", id)  // ← no scoping
+  .select()
+  .single();
 ```
 
-2. **src/workspaces/organization_admin/pages/OrganizationAdminDashboard.tsx**
-   - Line 84: `dashboardData: any`
-   - Line 95: `dashboardData.charts: any`
-   - Line 113: `dashboardData.lists: any`
-   - Line 354: `item: any`
-   - Line 384: `item: any`
-   - Line 414: `item: any`
-   - Line 465: `item: any`
-   - Line 502: `item: any`
-
-**Recommended Fix:**
-Define proper TypeScript interfaces:
-```typescript
-// Define interfaces for dashboard data
-interface DashboardKPIs {
-  leads: number;
-  contracts: number;
-  quotes: number;
-  orders: number;
-}
-
-interface DashboardLists {
-  opportunities: Opportunity[];
-  contracts: Contract[];
-  activities: Activity[];
-  leads: Lead[];
-  auditLogs: AuditLog[];
-}
-
-interface DashboardCharts {
-  leads: Lead[];
-  contracts: Contract[];
-  quotes: Quote[];
-}
-
-interface DashboardData {
-  kpis: DashboardKPIs;
-  lists: DashboardLists;
-  charts: DashboardCharts;
-}
-
-// Then use in component:
-const { data: dashboardData } = useQuery<DashboardData>({
-  queryKey: ['organization-dashboard', tenantId],
-  queryFn: fetchDashboardData
-});
-```
-
-For the hooks file, use proper typing:
-```typescript
-// Instead of:
-{ data: Record<string, unknown>[] | null; count: number | null }[]
-
-// Use:
-type SupabaseCountResponse = { data: Lead[] | null; count: number | null };
-```
-
-### 4.2 Missing useMemo Dependencies
-
-**File:** `src/workspaces/organization_admin/pages/OrganizationAdminDashboard.tsx`  
-**Issue:** React Hook useMemo has a missing dependency: 'dashboardData.charts'  
-**Severity:** Medium  
-**Line:** 135
-
-**Recommended Fix:**
-Add the missing dependency or restructure the code:
-```typescript
-// OPTION 1: Add dependency
-const chartData = useMemo(() => {
-  // Transform dashboardData.charts
-  return dashboardData?.charts?.leads?.map(...) ?? [];
-}, [dashboardData?.charts]); // Add dependency
-
-// OPTION 2: Use useMemo for all dependent values
-const chartData = useMemo(() => {
-  if (!dashboardData?.charts) return defaultData;
-  return transformData(dashboardData.charts);
-}, [dashboardData]); // Add the entire object
-
-// OPTION 3: Disable eslint rule with explanation (not recommended)
-const chartData = useMemo(() => {
-  return dashboardData?.charts?.leads?.map(...) ?? [];
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, []); // Only if you intentionally want stale data
-```
+**Mitigation:** RLS on `contract_esignatures` does join through `contracts` table, providing DB-level protection.
 
 ---
 
-## 5. Architecture Issues
+### C-05: `approveClientMembership` / `rejectClientMembership` — No Organization Scoping
 
-### 5.1 Dual Provider System
+**File:** [`src/app/providers/AuthProvider.tsx`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/app/providers/AuthProvider.tsx) (lines ~775-810)  
+**Severity:** 🔴 CRITICAL  
+**Impact:** Cross-tenant membership state manipulation  
 
-The application has two parallel provider systems that manage similar data:
+Both functions update `organization_memberships` filtered only by `user_id` and `role = "client"`, without checking `organization_id`. An admin from Org A could approve/reject a client membership belonging to Org B.
 
-**OrganizationProvider** (`src/app/providers/OrganizationProvider.tsx`):
-- Manages `Organization` (via `organizations` table)
-- Uses `organization_memberships` table
-- Uses `organization_subscriptions` table
-
-**TenantProvider** (`src/app/providers/TenantProvider.tsx`):
-- Manages `Tenant` (via `tenants` table)
-- Uses `tenant_users` table
-- Uses `tenant_subscriptions` table
-
-**Recommended Fix:**
-
-**Option A (Recommended): Consolidate to Single System**
-1. Choose Tenant as the primary model (more common in SaaS)
-2. Deprecate OrganizationProvider and remove from App.tsx
-3. Migrate all organization_* references to tenant_*
-4. Update the database schema to use tenants consistently
-
-**Option B: Keep Both with Clear Boundaries**
-1. Rename OrganizationProvider to PlatformProvider (for platform-level operations)
-2. Keep TenantProvider for tenant-specific operations
-3. Add a unified hook that delegates to the correct provider:
 ```typescript
-// src/core/hooks/useWorkspace.ts
-import { useTenant } from './useTenant';
-import { useOrganization } from './useOrganization';
-
-export function useWorkspace() {
-  const tenant = useTenant();
-  const organization = useOrganization();
-  
-  // Return based on which is active
-  return {
-    current: tenant.tenant ?? organization.organization,
-    isUsingTenant: !!tenant.tenant,
-    // ...
-  };
-}
+// approveClientMembership
+await unsafeSupabase
+  .from("organization_memberships")
+  .update({ account_state: "active", ... })
+  .eq("user_id", userId)       // ← only user-scoped
+  .eq("account_state", "pending_approval")
+  .eq("role", "client");       // ← no organization_id filter!
 ```
 
-**Option C: Sequential Loading**
-1. Load only one provider at a time based on user role
-2. Use a loading state to prevent race conditions
-
-### 5.2 Role System Complexity
-
-**Issue:** The role system has multiple layers of complexity:
-
-1. **Legacy Roles:** `platform_admin`, `user`, `pending_approval`, `rejected`
-2. **Platform Roles:** `platform_super_admin`
-3. **Organization Roles:** `owner`, `admin`, `manager`, `employee`, `client`
-
-**Recommended Fix:**
-
-1. **Simplify to single role source** (recommended):
-```typescript
-// src/core/types/roles.ts - Simplified enum
-export enum AppRole {
-  PLATFORM_SUPER_ADMIN = 'platform_super_admin',
-  OWNER = 'owner',
-  ADMIN = 'admin',
-  MANAGER = 'manager',
-  EMPLOYEE = 'employee',
-  CLIENT = 'client',
-  PENDING_APPROVAL = 'pending_approval',
-  REJECTED = 'rejected'
-}
-```
-
-2. **Remove legacy role mappings** - Delete normalizeRole() function after migration
-
-3. **Add strict type checking**:
-```typescript
-// Enforce only valid roles
-export type ValidRole = `${AppRole}`;
-```
-
-4. **Create migration script** for existing data:
-```sql
--- Migrate legacy roles to new system
-UPDATE users 
-SET role = CASE 
-  WHEN role = 'tenant_admin' THEN 'admin'
-  WHEN role = 'tenant_manager' THEN 'manager'
-  WHEN role = 'tenant_user' THEN 'employee'
-  WHEN role = 'client_user' THEN 'client'
-  ELSE role
-END;
-```
-
-### 5.3 Duplicate Context Hooks
-
-**Issue:** Two hooks provide similar functionality:
-
-1. `useOrganization()` - from `src/core/hooks/organization-context.ts`
-2. `useTenant()` - from `src/core/tenant/useTenant.ts`
-
-Both provide:
-- Organization/Tenant object
-- Subscription data
-- Module access checks (hasModule)
-- Memberships
-
-**Recommended Fix:**
-
-**Option A: Create unified hook (recommended)**
-```typescript
-// src/core/hooks/useWorkspace.tsx
-import { createContext, useContext } from 'react';
-import { useTenant } from '@/core/tenant/useTenant';
-import { useOrganization } from '@/workspaces/organization/hooks/useOrganization';
-
-export function useWorkspace() {
-  const tenantContext = useTenant();
-  const orgContext = useOrganization();
-  
-  // Prefer tenant if available, fallback to organization
-  return {
-    workspace: tenantContext.tenant ?? orgContext.organization,
-    subscription: tenantContext.subscription ?? orgContext.subscription,
-    hasModule: tenantContext.hasModule ?? orgContext.hasModule,
-    memberships: tenantContext.memberships ?? orgContext.memberships,
-    loading: tenantContext.tenantLoading ?? orgContext.organizationLoading,
-    // ...
-  };
-}
-```
-
-**Option B: Deprecate one hook**
-- Mark useOrganization() as @deprecated
-- Update all imports to use useTenant()
-- Eventually remove useOrganization()
+**Fix:** Add `.eq("organization_id", currentOrganizationId)` to both functions.
 
 ---
 
-## 6. Module Scope Issues
+### C-06: `useDocumentESignatures` — No Tenant Scoping on Read
 
-### 6.1 Potential Module Access Failures
+**File:** [`src/modules/documents/hooks/useDocuments.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/modules/documents/hooks/useDocuments.ts) (line ~508)  
+**Severity:** 🔴 CRITICAL  
+**Impact:** Cross-tenant e-signature data exposure  
 
-The following hooks use `requireOrganizationScope` which may fail:
+When `documentId` is not provided, the query fetches ALL e-signatures across ALL tenants with no `organization_id` filter, no `applyTenantOwnershipScope`.
 
-- `src/modules/crm/hooks/useCRM.ts`
-- `src/modules/cpq/hooks/useCPQ.ts`
-- `src/modules/clm/hooks/useCLM.ts`
-- `src/modules/erp/hooks/useERP.ts`
-- `src/modules/documents/hooks/useDocuments.ts`
-
-**Recommended Fix:**
-
-1. **Update module hooks to use unified workspace context**:
 ```typescript
-// In each module hook, change from:
-import { useOrganization } from "@/workspaces/organization/hooks/useOrganization";
-
-// To:
-import { useWorkspace } from "@/core/hooks/useWorkspace";
-
-// Then use:
-const { workspace, hasModule } = useWorkspace();
-const moduleReady = hasModule('crm') && workspace !== null;
+let query = supabase
+  .from("document_esignatures")
+  .select("*, document:auto_documents(...)")
+  .order("created_at", { ascending: false });
+// No org filter applied when documentId is null
 ```
 
-2. **Or make module scope more resilient**:
-```typescript
-// src/core/utils/module-scope.ts
-export function requireWorkspaceScope(context: ModuleScopeContext) {
-  if (!isModuleScopeReady(context)) {
-    throw new Error('Workspace not ready - please wait for authentication');
-  }
-  return context;
-}
-
-// Add null checks and fallback
-function getOrganizationOrTenant() {
-  try {
-    return useOrganization();
-  } catch {
-    try {
-      return useTenant();
-    } catch {
-      return null;
-    }
-  }
-}
-```
-
-3. **Add loading states** to prevent access before providers are ready:
-```typescript
-const { workspace, loading } = useWorkspace();
-
-if (loading) return <Skeleton />;
-if (!workspace) return <NoAccess />;
-```
+**Mitigation:** RLS policy `des_select` does join through `auto_documents`, but this still fetches unnecessarily broadly.
 
 ---
 
-## 7. Potential Runtime Issues
+### C-07: `useDocumentVersions` — No Tenant Scoping
 
-### 7.1 Missing Environment Variables — ✅ FIXED
+**File:** [`src/modules/documents/hooks/useDocuments.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/modules/documents/hooks/useDocuments.ts) (line ~754)  
+**Severity:** 🔴 CRITICAL  
+**Impact:** Cross-tenant version history exposure  
 
-**Status:** ✅ **Fixed on 2026-03-06** — Added runtime validation in `client.ts` that throws a clear error if variables are missing.
+Fetches all versions for a document ID without checking that the document belongs to the current user's organization.
 
-**Critical:** The Supabase client is initialized with environment variables that may not be set:
+---
+
+## 3. Multi-Tenancy Isolation Bugs
+
+### T-01: Systemic `organization_id` vs `tenant_id` Column Mismatch
+
+**Files:** Multiple  
+**Severity:** 🟠 HIGH  
+**Impact:** Runtime failures or silently broken scoping  
+
+The codebase has two naming conventions for the same concept:
+- **`organization_id`**: Used in `module-scope.ts`, `OrganizationProvider.tsx`, all module hooks
+- **`tenant_id`**: Used in DB types (`types.ts`), `TenantProvider.tsx`, `jobs.ts`
+
+The `module-scope.ts` file applies `.eq("organization_id", ...)`, but several DB table types define the column as `tenant_id`. The RLS policies handle this with `COALESCE(organization_id, tenant_id)`, meaning **both columns may exist on some tables**. But if a table only has `tenant_id` and the app filters on `organization_id`, **the filter silently returns zero rows** instead of erroring.
+
+**Evidence:**
+- `buildModuleCreatePayload` injects `organization_id` AND `tenant_id` (line 86 of `module-scope.ts`)
+- `applyModuleReadScope` filters on `organization_id` only
+- DB types show tables with `tenant_id` column only
+
+---
+
+### T-02: Dual Provider Architecture Creates Confusion
+
+**Files:** [`OrganizationProvider.tsx`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/app/providers/OrganizationProvider.tsx), [`TenantProvider.tsx`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/app/providers/TenantProvider.tsx)  
+**Severity:** 🟠 HIGH  
+**Impact:** Incorrect data isolation, stale context  
+
+Two separate providers manage what is conceptually the same entity:
+- `OrganizationProvider` queries `organizations`, `organization_memberships`, `organization_subscriptions`
+- `TenantProvider` queries `tenants`, `tenant_users`, `tenant_subscriptions`
+
+All module hooks use `useOrganization()`. The `TenantProvider` exists but may fetch stale or different data. If both tables exist and get out of sync, the user sees inconsistent state.
+
+---
+
+### T-03: `useDocumentsRealtime` — Global Realtime Subscription
+
+**File:** [`src/modules/documents/hooks/useDocuments.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/modules/documents/hooks/useDocuments.ts) (line ~39)  
+**Severity:** 🟡 MEDIUM  
+**Impact:** Information disclosure via realtime events  
+
+The realtime subscription subscribes to `{ event: "*", schema: "public", table: "auto_documents" }` without any filter — it receives change notifications for ALL organizations' documents. While the actual data refetch is scoped, the **event payload in postgres_changes can leak** row-level data.
+
+**Fix:** Add `.filter("organization_id", "eq", organizationId)` to the channel subscription.
+
+---
+
+### T-04: `purchase_order_items` Child Queries Don't Scope by Organization
+
+**File:** [`src/modules/erp/hooks/useERP.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/modules/erp/hooks/useERP.ts) (line ~607)  
+**Severity:** 🟡 MEDIUM  
+**Impact:** Relies entirely on RLS  
+
+Inside `usePurchaseOrder`, the items sub-query filters only by `purchase_order_id` without checking that those items belong to the correct organization. The delete path (`useDeletePurchaseOrder`) also soft-deletes items by `purchase_order_id` only.
+
+---
+
+## 4. Authentication & Authorization Bugs
+
+### A-01: Route Guards Don't Check `suspended` / `rejected` Account States
+
+**File:** [`src/core/auth/components/ProtectedRoute.tsx`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/core/auth/components/ProtectedRoute.tsx)  
+**Severity:** 🟠 HIGH  
+**Impact:** Suspended users can access protected routes  
+
+The route guards (`TenantAdminRoute`, `ClientRoute`, `AdminRoute`) check role but never check `account_state`. A user whose membership is `suspended` or `rejected` can still access all routes as long as they have a valid session and role.
 
 ```typescript
-// src/core/api/client.ts
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-```
-
-**Recommended Fix:**
-
-1. **Create .env.example file** with all required variables:
-```bash
-# .env.example
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_PUBLISHABLE_KEY=your-anon-key
-```
-
-2. **Add validation on app startup**:
-```typescript
-// src/core/api/client.ts
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  throw new Error(
-    'Missing required environment variables: VITE_SUPABASE_URL, VITE_SUPABASE_PUBLISHABLE_KEY'
-  );
-}
-
-export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {...});
-```
-
-3. **Update package.json scripts** to validate env vars:
-```json
-{
-  "scripts": {
-    "predev": "node scripts/check-env.js",
-    "prebuild": "node scripts/check-env.js"
-  }
-}
-```
-
-### 7.2 Organization vs Tenant Slug Navigation
-
-**File:** `src/app/App.tsx` (line 166-167)
-
-**Recommended Fix:**
-
-1. **Use unified workspace slug**:
-```typescript
-function RootRedirect() {
-  const { tenant, tenantLoading } = useTenant();
-  const { organization, organizationLoading } = useOrganization();
-  const loading = tenantLoading || organizationLoading;
-
-  if (loading) return <RouteLoader />;
-
-  // Prefer tenant, fallback to organization
-  const workspaceSlug = tenant?.slug ?? organization?.slug;
-  
-  if (workspaceSlug) {
-    return <Navigate to={`/${workspaceSlug}/app/dashboard`} replace />;
-  }
-  
+// CURRENT — role-only check
+if (!ADMIN_ROLES.includes(role)) {
   return <Navigate to="/auth/sign-in" replace />;
 }
+// MISSING: account_state check
 ```
 
-2. **Or consolidate to single slug**:
+**Fix:** Add `account_state` to the auth context and check `account_state === "active"` in all route guards.
+
+---
+
+### A-02: Role Resolution Falls Back to `pending_approval` Unsafely
+
+**File:** [`src/core/auth/components/ProtectedRoute.tsx`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/core/auth/components/ProtectedRoute.tsx)  
+**Severity:** 🟡 MEDIUM  
+**Impact:** Unexpected access for users with null roles  
+
 ```typescript
-// Get unified workspace identifier
-function getWorkspaceSlug(): string | null {
-  // This should use the unified workspace hook
-  return tenant?.slug ?? organization?.slug ?? null;
-}
+const role = authRole ?? "pending_approval";
 ```
 
-### 7.3 Root Redirect Logic
+If `authRole` is `null` (no membership found), the user is treated as `pending_approval`. While route guards may block most access, this is a dangerous default — it should fall back to no access rather than a valid state.
 
-**File:** `src/app/App.tsx` (line 156-171)
+---
 
-**Recommended Fix:**
+### A-03: `getUserRole` Caches Roles in `sessionStorage` Without Expiry
 
-Improve the redirect logic to handle edge cases:
+**File:** [`src/app/providers/AuthProvider.tsx`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/app/providers/AuthProvider.tsx) (line ~61)  
+**Severity:** 🟡 MEDIUM  
+**Impact:** Stale role after admin changes user permissions  
+
+Roles are cached with `ROLE_CACHE_KEY_PREFIX` in `sessionStorage`. If an admin changes a user's role (e.g., downgrades from `admin` to `employee`), the user continues operating with the old cached role until they close the browser tab.
+
+**Fix:** Add TTL to cached roles or invalidate on auth state changes.
+
+---
+
+### A-04: `signIn` Auto-Activates `pending_verification` Memberships Without Org Check
+
+**File:** [`src/app/providers/AuthProvider.tsx`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/app/providers/AuthProvider.tsx) (line ~900)  
+**Severity:** 🟠 HIGH  
+**Impact:** Membership activation across all organizations  
+
+When a user signs in with `pending_verification` status and their email is confirmed, the code auto-activates their membership. But the update query only filters by `user_id` and `account_state`:
+
 ```typescript
-function RootRedirect() {
-  const { role, loading } = useAuth();
-  const { tenant, tenantLoading } = useTenant();
-  const { organization, organizationLoading } = useOrganization();
+.eq("user_id", data.user.id)
+.eq("account_state", "pending_verification")
+// ← Updates ALL pending_verification memberships, not just one org
+```
 
-  if (loading || tenantLoading || organizationLoading) {
-    return <RouteLoader />;
-  }
+If the user has pending memberships in multiple organizations, ALL get activated simultaneously.
 
-  // Platform admin goes to platform
-  if (isPlatformRole(role)) {
-    return <Navigate to="/platform" replace />;
-  }
+---
 
-  // Try tenant first, then organization
-  const workspaceSlug = tenant?.slug ?? organization?.slug;
-  
-  if (workspaceSlug) {
-    // Redirect based on role
-    if (role === 'client') {
-      return <Navigate to={`/${workspaceSlug}/app/portal`} replace />;
-    }
-    return <Navigate to={`/${workspaceSlug}/app/dashboard`} replace />;
-  }
+### A-05: `OrganizationProvider` Uses `unsafeSupabase` Cast
 
-  // No workspace - check if they have pending approval
-  if (role === 'pending_approval') {
-    return <Navigate to="/pending-approval" replace />;
-  }
+**File:** [`src/app/providers/OrganizationProvider.tsx`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/app/providers/OrganizationProvider.tsx) (line 74)  
+**Severity:** 🟡 MEDIUM  
+**Impact:** Type safety bypass  
 
-  // No workspace and not pending - redirect to signup
-  return <Navigate to="/auth/sign-up" replace />;
-}
+```typescript
+const unsafeSupabase = supabase as unknown as SupabaseClient;
+```
+
+This double-cast (`as unknown as`) completely bypasses TypeScript's type system. Any query through this client will not be type-checked, meaning column name typos silently compile.
+
+---
+
+## 5. Module-Specific Bugs
+
+### M-01: CRM `mapAccount` Maps Wrong Fields
+
+**File:** [`src/modules/crm/hooks/useCRM.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/modules/crm/hooks/useCRM.ts) (line ~169)  
+**Severity:** 🟡 MEDIUM  
+**Impact:** Wrong data displayed in UI  
+
+```typescript
+email: row.domain ?? undefined,       // ← 'domain' is not email
+description: row.ownership ?? undefined, // ← 'ownership' is not description
+```
+
+The `domain` field (company website domain) is mapped to `email` property. The `ownership` field (e.g., "public", "private") is mapped to `description`.
+
+---
+
+### M-02: CRM `mapLead` / `mapAccount` / `mapContact` — `created_by` Always Equals `owner_id`
+
+**File:** [`src/modules/crm/hooks/useCRM.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/modules/crm/hooks/useCRM.ts)  
+**Severity:** 🔵 LOW  
+**Impact:** Incorrect audit trail  
+
+```typescript
+created_by: row.owner_id ?? undefined, // ← should be row.created_by
+```
+
+Every CRM entity maps `created_by` from `owner_id`. The actual `created_by` column (if it exists) is ignored.
+
+---
+
+### M-03: Documents Module Uses Different Scoping Pattern Than Other Modules
+
+**File:** [`src/modules/documents/hooks/useDocuments.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/modules/documents/hooks/useDocuments.ts)  
+**Severity:** 🟠 HIGH  
+**Impact:** Inconsistent security posture  
+
+CRM, CPQ, CLM, and ERP all use `applyModuleReadScope` / `applyModuleMutationScope` / `buildModuleCreatePayload`.
+
+Documents uses `applyTenantOwnershipScope` / `withOwnershipCreate` from `data-ownership.ts` — a completely different code path with different logic.
+
+This means:
+- No owner-scoped row filtering for documents
+- Different `organization_id` column inference
+- Mutations don't use `applyModuleMutationScope` at all
+
+---
+
+### M-04: ERP `mapFinancialRecord` Maps `reference_type` from `status`
+
+**File:** [`src/modules/erp/hooks/useERP.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/modules/erp/hooks/useERP.ts) (line ~186)  
+**Severity:** 🟡 MEDIUM  
+**Impact:** Incorrect data display  
+
+```typescript
+reference_type: row.status ?? undefined, // ← status is not reference_type
 ```
 
 ---
 
-## 8. Code Quality Issues
+### M-05: CPQ `useProducts` Uses Direct `organization_id` Filter Instead of Module Scope
 
-### 8.1 Duplicate Code in Layouts
+**File:** [`src/modules/cpq/hooks/useCPQ.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/modules/cpq/hooks/useCPQ.ts) (line ~61)  
+**Severity:** 🔵 LOW  
+**Impact:** Inconsistent pattern  
 
-**Issue:** Header and Footer components are duplicated:
+While all other queries use `applyModuleReadScope`, `useProducts` uses `requireOrganizationScope` + manual `.eq("organization_id", ...)`. This bypasses the owner-scoped row visibility logic.
 
-- `src/workspaces/employee/layout/Header.tsx`
-- `src/workspaces/employee/layout/Footer.tsx`
-- `src/workspaces/website/components/layout/Header.tsx`
-- `src/workspaces/website/components/layout/Footer.tsx`
+---
 
-**Recommended Fix:**
+### M-06: CLM `useCreateESignature` — No `organization_id` on Insert
 
-1. **Create shared components**:
+**File:** [`src/modules/clm/hooks/useCLM.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/modules/clm/hooks/useCLM.ts) (line ~474)  
+**Severity:** 🟡 MEDIUM  
+
+When inserting into `contract_esignatures`, the payload does not include `organization_id`. The RLS INSERT policy checks via a JOIN to `contracts`, but if the `contract_esignatures` table has an `organization_id` column, it will be NULL, breaking future direct queries.
+
+---
+
+## 6. Type Safety & TypeScript Issues
+
+### TS-01: `usePermissions` Has Wrong Import Paths
+
+**File:** [`src/core/rbac/usePermissions.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/core/rbac/usePermissions.ts)  
+**Severity:** 🟠 HIGH  
+**Impact:** Compilation may fail or resolve wrong module  
+
 ```typescript
-// src/components/layout/Header.tsx
-export function Header({ variant = 'default' }) {
-  // Use variant prop for styling differences
-  return <header className={variant === 'website' ? 'website-header' : 'app-header'}>
-    {/* ... */}
-  </header>;
-}
+import { useAuth } from "./useAuth";               // ← should be @/core/auth/useAuth
+import { useOrganization } from "./useOrganization"; // ← should be @/workspaces/organization/hooks/useOrganization
 ```
 
-2. **Update imports**:
+These relative imports may resolve if the file happens to be in the right folder, but they should use the `@/` path alias for consistency and correctness.
+
+---
+
+### TS-02: Pervasive `as unknown as` Double-Casts
+
+**Files:** Multiple providers and utilities  
+**Severity:** 🟡 MEDIUM  
+
 ```typescript
-// Replace duplicates with:
-import { Header } from '@/components/layout/Header';
-import { Footer } from '@/components/layout/Footer';
+// OrganizationProvider.tsx
+const unsafeSupabase = supabase as unknown as SupabaseClient;
+
+// ImpersonationProvider.tsx
+const unsafeSupabase = supabase as unknown as { from: ... };
+
+// audit.ts
+const unsafeSupabase = supabase as unknown as ...;
 ```
 
-3. **Remove duplicate files** after migration
+These casts bypass the auto-generated Supabase types entirely. Any column name error becomes a runtime failure instead of a compile-time error.
 
-### 8.2 Large File Sizes
+---
 
-Several files are excessively large, making them difficult to maintain:
+### TS-03: Duplicate `isModuleEnabled` Function
 
-| File | Size | Lines |
-|------|------|-------|
-| `src/core/api/types.ts` | 224KB | ~5000+ |
-| `src/integrations/types.ts` | 128KB | ~3000+ |
-| `src/app/providers/AuthProvider.tsx` | 35KB | ~1000+ |
-| `src/modules/crm/hooks/useCRM.ts` | 56KB | ~1500+ |
-| `src/modules/erp/hooks/useERP.ts` | 43KB | ~1200+ |
+**Files:** [`src/core/types/organization.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/core/types/organization.ts), [`src/core/types/tenant.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/core/types/tenant.ts)  
+**Severity:** 🔵 LOW  
 
-**Recommended Fix:**
+Identical function defined in both files. `OrganizationProvider` imports from `organization.ts`, `TenantProvider` from `tenant.ts`. Should be a single shared function.
 
-1. **Split large hook files** by functionality:
+---
+
+### TS-04: `quote_items` vs `quote_line_items` Table Name Inconsistency
+
+**Severity:** 🟡 MEDIUM  
+
+- **Frontend code** (`useCPQ.ts`, `useCRM.ts`): Uses `supabase.from("quote_items")`
+- **RLS policies** (`015_hardened_rls_policies.sql`): Creates policies for `quote_line_items`
+- **DB types** (`types.ts`): Defines `quote_items` table
+
+If the actual table is `quote_items` but RLS policies are created for `quote_line_items`, the policies are not applied. If the table was renamed, one side is outdated.
+
+---
+
+## 7. Data Integrity & Logic Bugs
+
+### D-01: `writeAuditLog` Uses Inconsistent Parameter Names
+
+**File:** [`src/core/utils/audit.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/core/utils/audit.ts)  
+**Severity:** 🟡 MEDIUM  
+
+CRM/CPQ/CLM/ERP hooks pass `tenantId` as the org identifier. Documents hook passes `organizationId`. The `writeAuditLog` function accepts both but maps them differently:
+
 ```typescript
-// src/modules/crm/hooks/useCRM/leads.ts
-// src/modules/crm/hooks/useCRM/contacts.ts
-// src/modules/crm/hooks/useCRM/accounts.ts
-// src/modules/crm/hooks/useCRM/opportunities.ts
-
-export { useLeads } from './leads';
-export { useContacts } from './contacts';
-export { useAccounts } from './accounts';
-export { useOpportunities } from './opportunities';
+// CRM passes: { tenantId: organizationId, ... }
+// Documents passes: { organizationId: organization?.id, ... }
 ```
 
-2. **Create barrel exports** for clean imports:
+The audit_logs table has `organization_id` column. If `tenantId` maps to a different column, audit records may have NULL org references.
+
+---
+
+### D-02: `claimPendingInvitations` Throws on Non-Numeric Returns
+
+**File:** [`src/app/providers/AuthProvider.tsx`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/app/providers/AuthProvider.tsx) (line ~854)  
+**Severity:** 🔵 LOW  
+
+Excessive defensive parsing for an RPC that should always return a number. If the RPC returns an unexpected type, the function returns 0 silently, masking errors.
+
+---
+
+### D-03: `mapOpportunity` Maps `description` from `next_step`
+
+**File:** [`src/modules/crm/hooks/useCRM.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/modules/crm/hooks/useCRM.ts) (line ~227)  
+**Severity:** 🟡 MEDIUM  
+
 ```typescript
-// src/modules/crm/hooks/useCRM/index.ts
-export * from './useCRM/leads';
-export * from './useCRM/contacts';
-// ...
+description: row.next_step ?? undefined, // ← should be row.description
+next_step: row.next_step ?? undefined,   // ← correct
 ```
 
-3. **Split AuthProvider** into smaller concerns:
+Both `description` and `next_step` properties are mapped from `row.next_step`.
+
+---
+
+### D-04: ERP `useCreatePurchaseOrder` Maps `payment_terms` from `notes`
+
+**File:** [`src/modules/erp/hooks/useERP.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/modules/erp/hooks/useERP.ts) (line ~635)  
+**Severity:** 🟡 MEDIUM  
+
 ```typescript
-// src/app/providers/auth/AuthProvider.tsx (main)
-// src/app/providers/auth/useAuth.ts (hook)
-// src/app/providers/auth/authState.ts (state logic)
-// src/app/providers/auth/authQueries.ts (queries)
-```
-
-4. **Regenerate types** if too large (should only include database types)
-
-### 8.3 Hardcoded Values
-
-**File:** `src/modules/cpq/components/QuotePDFTemplate.tsx` (line 87)
-```typescript
-const VAT_RATE = 0.15;  // Hardcoded 15% VAT
-```
-
-**Recommended Fix:**
-
-1. **Add to tenant/organization settings**:
-```typescript
-// Get from subscription or settings
-const VAT_RATE = organization?.settings?.vatRate 
-  ?? tenant?.settings?.vatRate 
-  ?? 0.15;
-```
-
-2. **Create configuration service**:
-```typescript
-// src/core/config/organizationConfig.ts
-export function getTaxRate(organization: Organization): number {
-  return organization.taxConfig?.vatRate 
-    ?? Number(process.env.DEFAULT_VAT_RATE || '0.15');
-}
-```
-
-3. **Add to database schema**:
-```sql
-ALTER TABLE organizations 
-ADD COLUMN IF NOT EXISTS tax_rate DECIMAL(5,4) DEFAULT 0.15;
+payment_terms: po.notes ?? null,  // ← should be po.payment_terms
+notes: po.notes ?? null,          // ← correct
 ```
 
 ---
 
-## 9. Security Considerations
+## 8. Performance Issues
 
-### 9.1 Public Environment Variables
+### P-01: `app_is_platform_super_admin` Called Multiple Times Per RLS Check
 
-**Issue:** Client-side code exposes Supabase URL and key:
+**File:** [`supabase/migrations/015_hardened_rls_policies.sql`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/supabase/migrations/015_hardened_rls_policies.sql)  
+**Severity:** 🔵 LOW  
+**Impact:** Additional DB function call per row per policy  
 
-```typescript
-// These are visible in browser developer tools
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-```
+Every RLS policy starts with `public.app_is_platform_super_admin(auth.uid())`. For a table with 4 policies (SELECT/INSERT/UPDATE/DELETE), this could mean 4+ function calls per operation. The function should be marked `STABLE` and postgres should cache it within a statement, but **per-row evaluation on large tables** could be expensive.
 
-**Recommended Fix:**
-
-1. **Use VITE_ prefix (already done)** - This is correct for client-side exposure
-2. **Ensure Supabase RLS is enabled**:
-```sql
--- Enable RLS on all tables
-ALTER TABLE leads ENABLE ROW LEVEL SECURITY;
-ALTER TABLE accounts ENABLE ROW LEVEL SECURITY;
--- etc.
-```
-
-3. **Create RLS policies**:
-```sql
--- Example: Users can only see their organization's data
-CREATE POLICY "Users can view own organization data" ON leads
-  FOR SELECT
-  USING (organization_id IN (
-    SELECT organization_id 
-    FROM organization_memberships 
-    WHERE user_id = auth.uid()
-  ));
-```
-
-4. **Use service role only on server** - Never expose service role key in client
-5. **Add additional security headers** in vite.config.ts:
-```typescript
-export default defineConfig({
-  server: {
-    headers: {
-      'Content-Security-Policy': 'default-src \'self\'; script-src \'self\' \'unsafe-inline\'; connect-src https://*.supabase.co',
-    },
-  },
-});
-```
-
-### 9.2 Role-Based Access Control Complexity
-
-The RBAC system in `src/core/rbac/usePermissions.ts` has complex permission checks that may have gaps:
-
-- Multiple role types (legacy, platform, organization) create potential bypass opportunities
-- Permission checks may not cover all edge cases
-
-**Recommended Fix:**
-
-1. **Simplify role system** (see Section 5.2)
-2. **Create explicit permission checks**:
-```typescript
-// src/core/rbac/permissions.ts
-export const Permissions = {
-  // Define all possible actions
-  VIEW_DASHBOARD: 'dashboard:view',
-  MANAGE_USERS: 'users:manage',
-  VIEW_LEADS: 'leads:view',
-  CREATE_LEADS: 'leads:create',
-  // ... more actions
-} as const;
-
-// Create role-permission mapping
-export const RolePermissions: Record<string, string[]> = {
-  platform_super_admin: Object.values(Permissions),
-  owner: [Permissions.VIEW_DASHBOARD, Permissions.MANAGE_USERS, ...],
-  admin: [Permissions.VIEW_DASHBOARD, Permissions.MANAGE_USERS, Permissions.VIEW_LEADS, ...],
-  manager: [Permissions.VIEW_DASHBOARD, Permissions.VIEW_LEADS, Permissions.CREATE_LEADS],
-  employee: [Permissions.VIEW_DASHBOARD, Permissions.VIEW_LEADS],
-  client: [Permissions.VIEW_PORTAL],
-};
-
-// Check permission function
-export function hasPermission(role: AppRole, permission: string): boolean {
-  const permissions = RolePermissions[role];
-  return permissions?.includes(permission) ?? false;
-}
-```
-
-3. **Add audit logging for permission denied events**
+**Fix:** Consider using `SET` configuration variables (`SET role`) or `current_setting()` for role caching within a transaction.
 
 ---
 
-## 10. Performance Concerns
+### P-02: `useDocumentsRealtime` Creates Multiple Channels Per Component
 
-### 10.1 Redundant Data Fetching
+**File:** [`src/modules/documents/hooks/useDocuments.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/modules/documents/hooks/useDocuments.ts)  
+**Severity:** 🔵 LOW  
 
-Both OrganizationProvider and TenantProvider fetch membership data on app load:
-
-```typescript
-// OrganizationProvider - line 122-126
-const membershipsResult = await unsafeSupabase
-  .from("organization_memberships")
-  .select(...)
-  .eq("user_id", userId)
-
-// TenantProvider - line 79-83
-const membershipsResult = await supabase
-  .from("tenant_users")
-  .select(...)
-  .eq("user_id", userId)
-```
-
-**Recommended Fix:**
-
-1. **Consolidate to single provider** (see Section 5.1)
-2. **Implement deduplication** if keeping both:
-```typescript
-// Cache membership data
-const cache = new Map<string, Membership[]>();
-
-async function fetchMemberships(userId: string) {
-  const cacheKey = `memberships:${userId}`;
-  if (cache.has(cacheKey)) {
-    return cache.get(cacheKey)!;
-  }
-  
-  // Fetch and cache for 5 minutes
-  const data = await fetchFromAPI(userId);
-  cache.set(cacheKey, data);
-  setTimeout(() => cache.delete(cacheKey), 5 * 60 * 1000);
-  return data;
-}
-```
-3. **Use React Query's deduplication**:
-```typescript
-// Both providers can share the same query key
-const { data } = useQuery({
-  queryKey: ['user-memberships', userId],
-  queryFn: () => fetchMemberships(userId),
-  // This ensures only one request is made
-});
-```
-
-### 10.2 Large Bundle Size
-
-The application imports from multiple large modules:
-- `recharts` (charting library)
-- `date-fns` (date utilities)
-- Multiple Radix UI components
-
-**Recommended Fix:**
-
-1. **Use dynamic imports for heavy components**:
-```typescript
-// Lazy load charts
-const ChartComponent = lazy(() => import('./components/ChartComponent'));
-
-// Or use React.lazy
-const Dashboard = lazy(() => import('./pages/Dashboard'));
-```
-
-2. **Use tree-shaking friendly imports**:
-```typescript
-// Instead of:
-import { format, parseISO, addDays } from 'date-fns';
-
-// Use:
-import format from 'date-fns/format';
-import parseISO from 'date-fns/parseISO';
-import addDays from 'date-fns/addDays';
-
-// Or use date-fns-tz for lighter bundle
-```
-
-3. **Use lighter alternatives**:
-```typescript
-// Replace recharts with lighter alternative:
-// - Chart.js (smaller)
-// - visx (most modular)
-// - Custom SVG charts for simple needs
-```
-
-4. **Configure Vite for better tree-shaking**:
-```typescript
-// vite.config.ts
-export default defineConfig({
-  build: {
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom'],
-          'vendor-ui': ['@radix-ui/react-dialog', '@radix-ui/react-dropdown-menu'],
-          'vendor-charts': ['recharts'],
-        },
-      },
-    },
-  },
-});
-```
+Each document-related hook calls `useDocumentsRealtime` with a different `scope` parameter (e.g., `"templates"`, `"documents"`, `"esignatures-{id}"`). If multiple hooks render simultaneously, the app creates 3+ realtime channels subscribing to the same tables.
 
 ---
 
-## 11. Migration/Compatibility Issues
+### P-03: Query Key Invalidation Is Over-Broad
 
-### 11.1 Legacy Route Support
-
-The app maintains legacy route redirects:
+**Files:** All module hooks  
+**Severity:** 🔵 LOW  
 
 ```typescript
-// src/app/App.tsx - line 332-335
-<Route path="/admin/*" element={<LegacyAdminRedirect />} />
-<Route path="/dashboard/*" element={<LegacyDashboardRedirect />} />
-<Route path="/portal/*" element={<LegacyPortalRedirect />} />
+queryClient.invalidateQueries({ queryKey: ["contracts"] }); // Invalidates ALL contract queries
+queryClient.invalidateQueries({ queryKey: ["contract"] });  // Invalidates ALL single-contract queries
 ```
 
-**Recommended Fix:**
-
-1. **Phase out legacy routes** - Set a deprecation timeline
-2. **Add deprecation warnings**:
-```typescript
-function LegacyDashboardRedirect() {
-  console.warn(
-    'DEPRECATED: /dashboard/* routes are deprecated. ' +
-    'Please update your bookmarks to /{tenantSlug}/app/*'
-  );
-  // ... existing logic
-}
-```
-
-3. **Track usage** - Add analytics to see which legacy routes are being used
-4. **Create migration guide** for existing users
-5. **Set sunset date** - Remove after certain version or date
-
-### 11.2 Multiple Sign-Up Flows
-
-The application has multiple signup flows:
-- Organization signup
-- Client self-signup
-- Employee invitation acceptance
-- Client invitation acceptance
-
-**Recommended Fix:**
-
-1. **Consolidate signup flows** into a single wizard:
-```typescript
-// SignUpWizard.tsx
-enum SignUpStep {
-  USER_INFO = 'user_info',
-  ORGANIZATION = 'organization',  // or SELECT_ORGANIZATION for clients
-  VERIFICATION = 'verification',
-}
-```
-
-2. **Unify invitation handling**:
-```typescript
-// Use token type to determine flow
-interface InvitationToken {
-  type: 'employee' | 'client' | 'organization';
-  expiresAt: string;
-  // ...
-}
-```
-
-3. **Create reusable components** for common signup steps
+This causes unnecessary refetches across all tenant contexts. Should include org/tenant ID in the key prefix for targeted invalidation.
 
 ---
 
-## 12. Testing & Documentation
+## 9. Code Quality & Maintainability
 
-### 12.1 Missing Tests
+### Q-01: `ImpersonationProvider` Defines Inline Type Casts for Supabase
 
-No test files were found in the project structure. Critical components should have unit tests:
-- AuthProvider
-- TenantProvider / OrganizationProvider
-- Role normalization functions
-- Protected route components
+**File:** [`src/app/providers/ImpersonationProvider.tsx`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/src/app/providers/ImpersonationProvider.tsx)  
+**Severity:** 🔵 LOW  
 
-**Recommended Fix:**
+Three separate inline Supabase type definitions (lines ~25, ~85, ~115) that manually define `.from()`, `.insert()`, `.update()` chains. These should use the auto-generated types or a shared unsafe client helper.
 
-1. **Set up testing framework**:
-```bash
-npm install -D vitest @testing-library/react @testing-library/jest-dom jsdom
-```
+---
 
-2. **Configure Vitest** in vite.config.ts:
+### Q-02: Wildcard CORS in Edge Functions
+
+**File:** [`supabase/functions/_shared/resend.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/supabase/functions/_shared/resend.ts)  
+**Severity:** 🟡 MEDIUM  
+
 ```typescript
-/// <reference types="vitest" />
-export default defineConfig({
-  test: {
-    environment: 'jsdom',
-    globals: true,
-    setupFiles: ['./src/test/setup.ts'],
-  },
-});
+"Access-Control-Allow-Origin": "*",
 ```
 
-3. **Create test files**:
-```typescript
-// src/app/providers/__tests__/TenantProvider.test.tsx
-import { render, screen, waitFor } from '@testing-library/react';
-import { TenantProvider } from '../TenantProvider';
-
-describe('TenantProvider', () => {
-  it('provides tenant context to children', async () => {
-    // Test implementation
-  });
-});
-
-// src/core/types/__tests__/roles.test.ts
-import { describe, it, expect } from 'vitest';
-import { normalizeRole, isPlatformRole } from '../roles';
-
-describe('normalizeRole', () => {
-  it('normalizes legacy roles', () => {
-    expect(normalizeRole('tenant_admin')).toBe('admin');
-  });
-});
-```
-
-4. **Add CI check** for test coverage:
-```json
-// package.json
-{
-  "scripts": {
-    "test": "vitest",
-    "test:coverage": "vitest run --coverage"
-  }
-}
-```
-
-### 12.2 Documentation
-
-- PRD_SISWIT.html exists but may be outdated
-- docs/ folder contains planning documents but not API documentation
-
-**Recommended Fix:**
-
-1. **Create API documentation** using TypeDoc:
-```bash
-npm install -D typedoc
-```
-
-2. **Generate documentation**:
-```json
-// package.json
-{
-  "scripts": {
-    "docs": "typedoc --out docs/api src/"
-  }
-}
-```
-
-3. **Create component documentation**:
-```typescript
-/**
- * OrganizationProvider manages the current organization's state
- * and provides subscription/module access information.
- * 
- * @example
- * ```tsx
- * function MyComponent() {
- *   const { organization, hasModule } = useOrganization();
- *   
- *   if (hasModule('crm')) {
- *     return <CRMDashboard />;
- *   }
- * }
- * ```
- */
-export function OrganizationProvider({ children }) { ... }
-```
-
-4. **Update docs/README.md** with contribution guidelines
-5. **Create architecture decision records (ADRs)** in docs/ folder
+Edge Functions allow requests from any origin. In production, this should be restricted to the application domain.
 
 ---
 
-## 13. Summary of Issues by Severity
+### Q-03: `"use client"` Directive in Non-Next.js Project
 
-### Critical (Requires Immediate Attention)
-1. ~~ESLint parsing error in `src/core/api/types.ts`~~ — ✅ FIXED
-2. ~~Conditional useMemo hook in TenantAdminLayout.tsx~~ — ✅ ALREADY FIXED
-3. ~~Missing environment variables (will cause runtime failure)~~ — ✅ FIXED
-4. Dual provider system creating potential race conditions
+**Files:** `OrganizationProvider.tsx`, `TenantProvider.tsx`  
+**Severity:** 🔵 LOW  
 
-### High (Should Be Addressed)
-1. ~~Type duplication (ModuleType, isModuleEnabled)~~ — ✅ FIXED
-2. ~~Excessive use of `any` types~~ — ✅ PARTIALLY FIXED (dashboard hook typed)
-3. Role system complexity leading to potential auth issues
-4. Module scope may fail due to provider conflicts
-
-### Medium (Recommended Fixes)
-1. Unnecessary dependencies in useCallback
-2. Missing useMemo dependencies
-3. Duplicate Header/Footer components
-4. Hardcoded values (VAT rate)
-
-### Low (Nice to Have)
-1. Unused eslint-disable directive
-2. Large file sizes
-3. Missing test coverage
-4. Legacy route complexity
+The project uses Vite, not Next.js. The `"use client"` directive has no effect and is misleading.
 
 ---
 
-## 14. Detailed Recommendations with Implementation Steps
+### Q-04: `getErrorMessage` Duplicated Across All Module Hooks
 
-### Priority 1: Fix Critical Issues (Week 1-2)
+**Files:** All 5 module hooks  
+**Severity:** 🔵 LOW  
 
-#### 1.1 Fix ESLint Parsing Error in types.ts
-- **Action:** Regenerate `src/core/api/types.ts` using: `npm run db:types`
-- **Alternative:** Manually recreate the file with proper UTF-8 encoding
-- **Verification:** Run `npm run lint` to confirm the error is resolved
-
-#### 1.2 Fix Conditional useMemo in TenantAdminLayout.tsx
-- **Action:** Move useMemo outside conditional blocks
-- **File:** `src/workspaces/organization_admin/layout/TenantAdminLayout.tsx:180`
-- **Test:** Verify component renders correctly in all states
-
-#### 1.3 Add Required Environment Variables
-- **Action:** Create/update `.env` file with:
-```bash
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_PUBLISHABLE_KEY=your-anon-key
-```
-- **Verify:** Check that Supabase client initializes without errors
-
-#### 1.4 Consolidate Provider System
-- **Short-term:** Add loading states to prevent race conditions
-- **Long-term:** Choose either Organization or Tenant as primary model
-- **Recommended:** Use Tenant as it's more common in SaaS
+Identical `getErrorMessage(error: unknown): string` function copy-pasted into every module hook. Should be extracted to a shared utility.
 
 ---
 
-### Priority 2: Address Architecture (Week 2-4)
+## 10. Edge Functions & Backend Issues
 
-#### 2.1 Eliminate Type Duplication
-- Create `src/core/types/modules.ts` with single ModuleType definition
-- Update imports in `organization.ts` and `tenant.ts` to re-export
-- Run find/replace across codebase to use single source
+### E-01: Edge Functions Use `inviteUserByEmail` — Existing Users Get Re-Invited
 
-#### 2.2 Simplify Role System
-- Remove legacy role mappings after data migration
-- Consolidate to single role enum in `src/core/types/roles.ts`
-- Create database migration to update legacy roles
+**Files:** [`send-employee-invitation/index.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/supabase/functions/send-employee-invitation/index.ts), [`send-client-invitation/index.ts`](file:///c:/Users/Piyus/OneDrive/Desktop/Main/Main/supabase/functions/send-client-invitation/index.ts)  
+**Severity:** 🟡 MEDIUM  
 
-#### 2.3 Fix Module Scope Hooks
-- Update all module hooks to use unified workspace context
-- Add proper loading/error states
-- Test each module (CRM, CPQ, CLM, ERP, Documents)
+`adminClient.auth.admin.inviteUserByEmail` will create a new auth user if one doesn't exist, or return an error if the user already exists (depending on Supabase config). The edge functions don't check if the user already has an account, which could cause confusing error messages.
 
 ---
 
-### Priority 3: Improve Code Quality (Week 3-6)
+### E-02: No Rate Limiting on Edge Function Invocations
 
-#### 3.1 Replace any Types
-- Add proper interfaces for DashboardData
-- Update OrganizationAdminDashboard.tsx with typed responses
-- Use React Query's generic types for better inference
+**Files:** Both invitation edge functions  
+**Severity:** 🟡 MEDIUM  
+**Impact:** Invitation spam, email abuse  
 
-#### 3.2 Fix Missing Dependencies
-- Add dashboardData.charts to useMemo dependencies array
-- Or restructure to use useEffect for side effects
-
-#### 3.3 Extract Shared Components
-- Create `src/components/layout/Header.tsx`
-- Create `src/components/layout/Footer.tsx`
-- Update imports across all workspaces
-
-#### 3.4 Add Configuration Service
-- Move hardcoded values (VAT_RATE, etc.) to config
-- Store in database or environment variables
+There is no rate-limiting check on how many invitations an admin can send. A compromised admin account could spam thousands of invitation emails.
 
 ---
 
-### Priority 4: Performance & Maintenance (Week 4-8)
+## 11. RLS Policy Analysis
 
-#### 4.1 Implement Code Splitting
-- Use React.lazy for route components
-- Dynamic imports for charts and heavy components
-- Configure Vite manual chunks
+### Strengths ✅
 
-#### 4.2 Set Up Testing
-- Install Vitest and Testing Library
-- Write tests for critical paths (auth, providers)
-- Add CI check for test coverage
+1. **Clean-slate rebuild** — drops all existing policies first, preventing policy accumulation bugs
+2. **Per-operation policies** — explicit SELECT/INSERT/UPDATE/DELETE (no `FOR ALL`)
+3. **Helper function** — `_rls_user_can_write_org()` reduces duplication and ensures consistent role checks
+4. **Child table joins** — child tables (quote_items, contract_esignatures, etc.) properly join to parent for org access
+5. **Audit log immutability** — no UPDATE/DELETE policies on audit_logs
+6. **`COALESCE(organization_id, tenant_id)`** — handles the dual-column legacy gracefully
+7. **Invitation validation** — memberships INSERT checks for valid pending invitations with expiry
 
-#### 4.3 Remove Legacy Support
-- Phase out legacy routes with deprecation warnings
-- Track usage and set sunset date
-- Update documentation
+### Concerns ⚠️
 
-#### 4.4 Add Documentation
-- Set up TypeDoc for API documentation
-- Create component documentation
-- Update docs/ with architecture decisions
+| Issue | Description | Severity |
+|-------|------------|----------|
+| `quote_items` vs `quote_line_items` | RLS policies created for `quote_line_items` but app uses `quote_items` | 🟡 MEDIUM |
+| No `FORCE RLS` | Intentionally omitted per comment, but means postgres role bypasses all policies | 🔵 LOW (by design) |
+| `pending_verification` can UPDATE | `account_state IN ('active', 'pending_verification')` allows unverified users to write | 🟡 MEDIUM |
+| No row-level owner check on business data | SELECT allows any org member to see all org data (no owner filtering at DB level) | 🔵 LOW (by design — app layer handles) |
 
 ---
 
-## Appendix: File Locations
+## 12. Recommendations & Priority Matrix
 
-### Key Source Files
-- **App Entry:** `src/app/App.tsx`
-- **Auth:** `src/app/providers/AuthProvider.tsx`
-- **Tenancy:** `src/app/providers/TenantProvider.tsx`
-- **Organization:** `src/app/providers/OrganizationProvider.tsx`
-- **Routing:** `src/core/auth/components/ProtectedRoute.tsx`
-- **Roles:** `src/core/types/roles.ts`
-- **Types:** `src/core/types/*.ts`
+### Immediate Fixes (This Sprint)
 
-### Module Hooks
-- CRM: `src/modules/crm/hooks/useCRM.ts`
-- CPQ: `src/modules/cpq/hooks/useCPQ.ts`
-- CLM: `src/modules/clm/hooks/useCLM.ts`
-- ERP: `src/modules/erp/hooks/useERP.ts`
-- Documents: `src/modules/documents/hooks/useDocuments.ts`
+| # | Issue | Action | Files |
+|---|-------|--------|-------|
+| 1 | C-01 | Add `organizationId` param to `softDeleteRecord` | `soft-delete.ts`, all callers |
+| 2 | C-02/C-03 | Add `applyModuleMutationScope` to document update mutations | `useDocuments.ts` |
+| 3 | C-04 | Add `ensureContractAccessible` to `useUpdateESignature` | `useCLM.ts` |
+| 4 | C-05 | Add `.eq("organization_id", orgId)` to approve/reject | `AuthProvider.tsx` |
+| 5 | C-06/C-07 | Add `applyTenantOwnershipScope` to esignature and version reads | `useDocuments.ts` |
+| 6 | A-01 | Add `account_state` check to all route guards | `ProtectedRoute.tsx` |
+| 7 | A-04 | Scope auto-activation to current org only | `AuthProvider.tsx` |
 
-### Workspaces
-- Auth: `src/workspaces/auth/`
-- Website: `src/workspaces/website/`
-- Employee: `src/workspaces/employee/`
-- Organization Admin: `src/workspaces/organization_admin/`
-- Organization Owner: `src/workspaces/organization/`
-- Platform Admin: `src/workspaces/platform/`
-- Portal: `src/workspaces/portal/`
+### Near-Term (Next 2 Sprints)
+
+| # | Issue | Action |
+|---|-------|--------|
+| 8 | T-01 | Unify `organization_id` / `tenant_id` naming across code and DB |
+| 9 | T-02 | Deprecate `TenantProvider` or merge with `OrganizationProvider` |
+| 10 | M-03 | Migrate Documents module to use `applyModuleReadScope`/`buildModuleCreatePayload` |
+| 11 | TS-01 | Fix import paths in `usePermissions.ts` |
+| 12 | TS-04 | Verify `quote_items` vs `quote_line_items` table name in DB |
+| 13 | T-03 | Add org filter to realtime subscriptions |
+| 14 | Q-02 | Restrict CORS in Edge Functions to production domain |
+
+### Backlog
+
+| # | Issue | Action |
+|---|-------|--------|
+| 15 | M-01 | Fix `mapAccount` field mappings (domain→email, ownership→description) |
+| 16 | D-03 | Fix `mapOpportunity.description` mapping |
+| 17 | D-04 | Fix `mapPurchaseOrder.payment_terms` mapping |
+| 18 | TS-02 | Replace `as unknown as` casts with properly typed Supabase client |
+| 19 | A-03 | Add TTL to role cache |
+| 20 | Q-04 | Extract `getErrorMessage` to shared utility |
+
+---
+
+> **Note:** The RLS policies in `015_hardened_rls_policies.sql` provide strong database-level protection. Many of the CRITICAL frontend issues (C-01 through C-07) are **mitigated by RLS** — meaning an attacker cannot actually access cross-tenant data at the Postgres level. However, **defense in depth requires fixing the application layer too**, and relying solely on RLS creates brittle security where any RLS misconfiguration becomes a full data breach.
 
 ---
 

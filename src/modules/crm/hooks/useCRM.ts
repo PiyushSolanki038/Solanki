@@ -103,10 +103,7 @@ const QUOTE_STATUSES: QuoteStatus[] = [
   "expired",
 ];
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
+import { getErrorMessage } from "@/core/utils/error";
 
 function asLeadStatus(value: string | null | undefined): LeadStatus {
   if (value && LEAD_STATUSES.includes(value as LeadStatus)) {
@@ -1323,7 +1320,7 @@ export function useQuote(id: string) {
 
       const { organizationId: requiredOrganizationId } = requireOrganizationScope(scope);
       const { data: items, error: itemsError } = await supabase
-        .from("quote_items")
+        .from("quote_line_items")
         .select("*")
         .eq("quote_id", id)
         .eq("organization_id", requiredOrganizationId)
@@ -1470,7 +1467,7 @@ export function useCreateQuoteItem() {
         sort_order: item.sort_order ?? 0,
       };
 
-      const { data, error } = await supabase.from("quote_items").insert(payload).select().single();
+      const { data, error } = await supabase.from("quote_line_items").insert(payload).select().single();
       if (error) throw error;
 
       void writeAuditLog({
@@ -1503,7 +1500,7 @@ export function useDeleteQuoteItem() {
     mutationFn: async (id: string) => {
       const { organizationId: requiredOrganizationId } = requireOrganizationScope(scope);
       const itemResult = await supabase
-        .from("quote_items")
+        .from("quote_line_items")
         .select("id, quote_id, organization_id")
         .eq("id", id)
         .eq("organization_id", requiredOrganizationId)

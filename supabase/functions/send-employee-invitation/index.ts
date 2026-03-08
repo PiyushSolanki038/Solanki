@@ -101,7 +101,55 @@ Deno.serve(async (req) => {
       return jsonResponse(403, { error: "Only organization owner/admin can send invitations." });
     }
 
+    // Rate limit: max 50 invitations per org per hour
+    const oneHourAgo = new Date(Date.now() - 3600_000).toISOString();
+    const { count } = await adminClient
+      .from("employee_invitations")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", payload.organizationId)
+      .gte("created_at", oneHourAgo);
+
+    if ((count ?? 0) >= 50) {
+      return jsonResponse(429, { error: "Too many invitations sent. Please try again later." });
+    }
+
     const redirectTo = resolveRedirectTo(payload);
+
+    // Check if user already exists before inviting
+    const { data: existingUsers } = await adminClient.auth.admin.listUsers();
+    const existingUser = existingUsers?.users?.find(
+      (u) => u.email?.toLowerCase() === payload.recipientEmail.trim().toLowerCase()
+    );
+
+    if (existingUser) {
+      // User already exists — check if they already have a membership
+      const { data: existingMembership } = await adminClient
+        .from("organization_memberships")
+        .select("id")
+        .eq("user_id", existingUser.id)
+        .eq("organization_id", payload.organizationId)
+        .maybeSingle();
+
+      if (existingMembership) {
+        return jsonResponse(409, { error: "This user is already a member of this organization." });
+      }
+
+      // Create membership directly for existing user
+      const { error: membershipError } = await adminClient
+        .from("organization_memberships")
+        .insert({
+          user_id: existingUser.id,
+          organization_id: payload.organizationId,
+          role: payload.roleLabel || "employee",
+          account_state: "active",
+        });
+
+      if (membershipError) {
+        return jsonResponse(500, { error: membershipError.message });
+      }
+
+      return jsonResponse(200, { ok: true, provider: "direct_membership", existing_user: true });
+    }
 
     const { error: inviteError } = await adminClient.auth.admin.inviteUserByEmail(payload.recipientEmail.trim(), {
       redirectTo,

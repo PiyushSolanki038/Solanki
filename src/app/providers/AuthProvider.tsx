@@ -41,10 +41,7 @@ type OrganizationLookupRow = {
   org_code: string;
 };
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
+import { getErrorMessage } from "@/core/utils/error";
 
 async function getFunctionInvokeErrorMessage(error: unknown): Promise<string> {
   const baseMessage = getErrorMessage(error);
@@ -762,9 +759,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const approveClientMembership = useCallback(
-    async (membershipId: string): Promise<{ error: string | null }> => {
+    async (membershipId: string, organizationId?: string): Promise<{ error: string | null }> => {
       try {
-        const { error } = await unsafeSupabase
+        let query = unsafeSupabase
           .from("organization_memberships")
           .update({
             account_state: "active",
@@ -773,6 +770,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           })
           .eq("id", membershipId)
           .eq("role", "client");
+
+        // Scope to organization for tenant isolation
+        if (organizationId) {
+          query = query.eq("organization_id", organizationId);
+        }
+
+        const { error } = await query;
 
         if (error) {
           return { error: error.message };
@@ -787,9 +791,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const rejectClientMembership = useCallback(
-    async (membershipId: string): Promise<{ error: string | null }> => {
+    async (membershipId: string, organizationId?: string): Promise<{ error: string | null }> => {
       try {
-        const { error } = await unsafeSupabase
+        let query = unsafeSupabase
           .from("organization_memberships")
           .update({
             account_state: "rejected",
@@ -798,6 +802,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           })
           .eq("id", membershipId)
           .eq("role", "client");
+
+        // Scope to organization for tenant isolation
+        if (organizationId) {
+          query = query.eq("organization_id", organizationId);
+        }
+
+        const { error } = await query;
 
         if (error) {
           return { error: error.message };
@@ -894,12 +905,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         // C-02 fix: Block login if email is not yet verified
         if (nextRole === ("pending_verification" as AuthRole)) {
-          // Sign the user out so no session lingers
-          await supabase.auth.signOut();
-          return {
-            error: "Please verify your email address before signing in. Check your inbox for the verification link.",
-            role: null as AuthRole,
-          };
+          // Check if Supabase Auth has already confirmed the email
+          const emailConfirmed = !!data.user.email_confirmed_at;
+          if (emailConfirmed) {
+            // Auto-activate only the FIRST pending membership by PK (not blanket)
+            const { data: pendingMembership } = await unsafeSupabase
+              .from("organization_memberships")
+              .select("id, organization_id")
+              .eq("user_id", data.user.id)
+              .eq("account_state", "pending_verification")
+              .limit(1)
+              .maybeSingle();
+
+            if (pendingMembership) {
+              const { error: activateError } = await unsafeSupabase
+                .from("organization_memberships")
+                .update({
+                  account_state: "active",
+                  is_email_verified: true,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", pendingMembership.id);
+
+              if (!activateError) {
+                // Re-fetch the role now that membership is active
+                nextRole = await getUserRole(data.user.id);
+              }
+            }
+          }
+
+          // If still pending (email not confirmed or activation failed), block login
+          if (nextRole === ("pending_verification" as AuthRole)) {
+            await supabase.auth.signOut();
+            return {
+              error: "Please verify your email address before signing in. Check your inbox for the verification link.",
+              role: null as AuthRole,
+            };
+          }
         }
 
         cacheRole(data.user.id, nextRole);

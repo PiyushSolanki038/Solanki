@@ -14,10 +14,7 @@ import { toast } from "sonner";
 import { Separator } from "@/ui/shadcn/separator";
 import { Badge } from "@/ui/shadcn/badge";
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
+import { getErrorMessage } from "@/core/utils/error";
 
 export default function ContractBuilderPage() {
   const navigate = useNavigate();

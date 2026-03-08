@@ -16,10 +16,7 @@ import {
 import { softDeleteRecord } from "@/core/utils/soft-delete";
 import { writeAuditLog } from "@/core/utils/audit";
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
+import { getErrorMessage } from "@/core/utils/error";
 
 function useCpqScope() {
   const { user, role } = useAuth();
@@ -314,7 +311,7 @@ export function useCreateQuote() {
           sort_order: index,
         }));
 
-        const itemsResult = await supabase.from("quote_items").insert(itemPayload);
+        const itemsResult = await supabase.from("quote_line_items").insert(itemPayload);
         if (itemsResult.error) throw itemsResult.error;
       }
 
@@ -413,7 +410,7 @@ export function useDeleteQuote() {
       await ensureQuoteAccessible(id, scope);
 
       const { error: childError } = await supabase
-        .from("quote_items")
+        .from("quote_line_items")
         .update({
           deleted_at: new Date().toISOString(),
           deleted_by: userId,
@@ -453,14 +450,14 @@ export function useQuoteItems(quoteId: string) {
   const { scope, enabled, tenantId, userId } = useCpqScope();
 
   return useQuery({
-    queryKey: ["quote_items", quoteId, tenantId, userId],
+    queryKey: ["quote_line_items", quoteId, tenantId, userId],
     enabled: enabled && Boolean(quoteId),
     queryFn: async () => {
       await ensureQuoteAccessible(quoteId, scope);
 
       const { organizationId: requiredOrganizationId } = requireOrganizationScope(scope);
       const { data, error } = await supabase
-        .from("quote_items")
+        .from("quote_line_items")
         .select("*")
         .eq("quote_id", quoteId)
         .eq("organization_id", requiredOrganizationId)
@@ -484,7 +481,7 @@ export function useCreateQuoteItem() {
 
       const { organizationId: requiredOrganizationId } = requireOrganizationScope(scope);
       const { data, error } = await supabase
-        .from("quote_items")
+        .from("quote_line_items")
         .insert({
           quote_id: quoteId,
           organization_id: requiredOrganizationId,
@@ -514,7 +511,7 @@ export function useCreateQuoteItem() {
       return data as QuoteItem;
     },
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["quote_items", variables.quote_id] });
+      queryClient.invalidateQueries({ queryKey: ["quote_line_items", variables.quote_id] });
       toast.success("Quote item added successfully");
     },
     onError: (error: unknown) => {
@@ -543,7 +540,7 @@ export function useUpdateQuoteItem() {
 
       const { organizationId: requiredOrganizationId } = requireOrganizationScope(scope);
       const { data, error } = await supabase
-        .from("quote_items")
+        .from("quote_line_items")
         .update(payload)
         .eq("id", id)
         .eq("organization_id", requiredOrganizationId)
@@ -564,7 +561,7 @@ export function useUpdateQuoteItem() {
       return data as QuoteItem;
     },
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["quote_items", variables.quoteId] });
+      queryClient.invalidateQueries({ queryKey: ["quote_line_items", variables.quoteId] });
       toast.success("Quote item updated successfully");
     },
     onError: (error: unknown) => {
@@ -582,7 +579,7 @@ export function useDeleteQuoteItem() {
       await ensureQuoteAccessible(quoteId, scope);
 
       const deleted = await softDeleteRecord({
-        table: "quote_items",
+        table: "quote_line_items",
         id,
         userId,
       });

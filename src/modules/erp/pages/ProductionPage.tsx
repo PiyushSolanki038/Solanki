@@ -72,10 +72,7 @@ interface ProductOption {
   sku: string;
 }
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
+import { getErrorMessage } from "@/core/utils/error";
 
 // Status Visuals
 const STATUS_STYLES: Record<string, string> = {

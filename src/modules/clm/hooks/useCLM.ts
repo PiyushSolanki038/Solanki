@@ -39,10 +39,7 @@ interface ESignatureRow {
   updated_at: string | null;
 }
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
+import { getErrorMessage } from "@/core/utils/error";
 
 function mapESignature(row: ESignatureRow): ESignature {
   return {
@@ -217,6 +214,7 @@ export function useDeleteContractTemplate() {
         table: "contract_templates",
         id,
         userId,
+        organizationId: scope.organizationId,
       });
 
       if (!deleted) throw new Error("Failed to delete template");
@@ -417,6 +415,7 @@ export function useDeleteContract() {
         table: "contracts",
         id,
         userId,
+        organizationId: scope.organizationId,
       });
 
       if (!deleted) throw new Error("Failed to delete contract");
@@ -471,12 +470,15 @@ export function useCreateESignature() {
       const contractId = sig.contract_id || "";
       await ensureContractAccessible(contractId, scope);
 
+      const { organizationId: requiredOrgId } = requireOrganizationScope(scope);
+
       const payload = {
         contract_id: contractId,
         signer_email: sig.recipient_email || "",
         signer_name: sig.recipient_name || "",
         status: sig.status || "pending",
         sent_at: new Date().toISOString(),
+        organization_id: requiredOrgId,
       };
 
       const { data, error } = await supabase.from("contract_esignatures").insert(payload).select().single();
@@ -526,10 +528,15 @@ export function useCreateESignature() {
 
 export function useUpdateESignature() {
   const queryClient = useQueryClient();
-  const { tenantId, userId } = useClmScope();
+  const { scope, tenantId, userId } = useClmScope();
 
   return useMutation({
-    mutationFn: async ({ id, ...updates }: Partial<ESignature> & { id: string }) => {
+    mutationFn: async ({ id, contract_id, ...updates }: Partial<ESignature> & { id: string; contract_id?: string }) => {
+      // Verify access to the parent contract before updating
+      if (contract_id) {
+        await ensureContractAccessible(contract_id, scope);
+      }
+
       const payload: Record<string, unknown> = {
         updated_at: new Date().toISOString(),
       };
@@ -537,7 +544,12 @@ export function useUpdateESignature() {
       if (updates.status) payload.status = updates.status;
       if (updates.signed_at) payload.signed_at = updates.signed_at;
 
-      const { data, error } = await supabase.from("contract_esignatures").update(payload).eq("id", id).select().single();
+      const scopedQuery = applyModuleMutationScope(
+        supabase.from("contract_esignatures").update(payload).eq("id", id),
+        scope,
+        [],
+      );
+      const { data, error } = await scopedQuery.select().single();
       if (error) throw error;
 
       void writeAuditLog({
@@ -652,6 +664,7 @@ export function useDeleteContractScan() {
         table: "contract_scans",
         id,
         userId,
+        organizationId: scope.organizationId,
       });
 
       if (!deleted) throw new Error("Failed to delete contract scan");
