@@ -13,19 +13,19 @@ export const leadershipData: LeadershipMember[] = [
     id: "1",
     name: "Nishant Raj",
     role: "Founder & CEO",
-    bio: "Visionary leader with 20+ years in enterprise cloud solutions, driving Siriusinfra's mission to transform businesses.",
+    bio: "Visionary leader with 20+ years in enterprise cloud solutions, driving SISWIT's mission to transform businesses.",
     imageUrl: "./public/nishant.jpeg",
     linkedIn: "https://linkedin.com/in/",
-    email: "nishant@siriusinfra.com"
+    email: "leadership@siswit.com"
   },
   {
     id: "2",
     name: "Anand Mishra",
     role: "Co-Founder & COO",
-    bio: "Operations expert ensuring seamless delivery and customer success across all Siriusinfra solutions.",
+    bio: "Operations expert ensuring seamless delivery and customer success across all SISWIT solutions.",
     imageUrl: "./public/anand.jpeg",
     linkedIn: "https://www.linkedin.com/in/anand-ranjan-812b2b260/",
-    email: "anandraj123k@gmail.com"
+    email: "operations@siswit.com"
   },
   {
     id: "3",
@@ -34,7 +34,7 @@ export const leadershipData: LeadershipMember[] = [
     bio: "Tech innovator architecting cutting-edge cloud infrastructure and AI-powered enterprise solutions.",
     imageUrl: "./public/hariom.jpeg",
     linkedIn: "https://linkedin.com/in/",
-    email: "hariom@siriusinfra.com"
+    email: "leadership@siswit.com"
   },
   {
     id: "4",
@@ -56,9 +56,9 @@ export const leadershipData: LeadershipMember[] = [
     id: "6",
     name: "Ananya Gupta",
     role: "Chief Marketing Officer",
-    bio: "Brand strategist driving Siriusinfra's global presence and customer engagement initiatives.",
+    bio: "Brand strategist driving SISWIT's global presence and customer engagement initiatives.",
     imageUrl: "https://images.unsplash.com/photo-1598550874175-4d0ef436c909?w=400&h=400&fit=crop&crop=face",
     linkedIn: "https://linkedin.com/in/",
-    email: "ananya@siriusinfra.com"
+    email: "marketing@siswit.com"
   }
 ];
